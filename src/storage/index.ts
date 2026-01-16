@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import sqlite3 from 'sqlite3';
+import { ActivityType } from '../types';
 
 const sqlite = sqlite3.verbose();
 
@@ -19,6 +20,9 @@ export interface Heartbeat {
     language?: string;
     dependencies?: string[];
     machine_name_id?: string;
+    activity_type: ActivityType;
+    has_file_activity: boolean;
+    has_agent_activity: boolean;
 }
 
 export function createDirectory(dir: string) {
@@ -52,15 +56,23 @@ export function createDatabase(dir: string): Promise<sqlite3.Database> {
                         branch TEXT,
                         language TEXT,
                         dependencies TEXT,
-                        machine_name_id TEXT
+                        machine_name_id TEXT,
+                        activity_type TEXT DEFAULT 'coding',
+                        has_file_activity INTEGER DEFAULT 1,
+                        has_agent_activity INTEGER DEFAULT 0
                     )
                 `);
+                
+                db.run(`ALTER TABLE heartbeats ADD COLUMN activity_type TEXT DEFAULT 'coding'`, () => {});
+                db.run(`ALTER TABLE heartbeats ADD COLUMN has_file_activity INTEGER DEFAULT 1`, () => {});
+                db.run(`ALTER TABLE heartbeats ADD COLUMN has_agent_activity INTEGER DEFAULT 0`, () => {});
                 
                 db.run(`CREATE INDEX IF NOT EXISTS idx_timestamp ON heartbeats(timestamp DESC)`);
                 db.run(`CREATE INDEX IF NOT EXISTS idx_entity ON heartbeats(entity)`);
                 db.run(`CREATE INDEX IF NOT EXISTS idx_project ON heartbeats(project)`);
                 db.run(`CREATE INDEX IF NOT EXISTS idx_project_timestamp ON heartbeats(project, timestamp DESC)`);
                 db.run(`CREATE INDEX IF NOT EXISTS idx_category_timestamp ON heartbeats(category, timestamp DESC)`);
+                db.run(`CREATE INDEX IF NOT EXISTS idx_activity_type_timestamp ON heartbeats(activity_type, timestamp DESC)`);
                 db.run(`CREATE INDEX IF NOT EXISTS idx_branch_timestamp ON heartbeats(branch, timestamp DESC)`, (err) => {
                     if (err) {
                         reject(err);
@@ -78,11 +90,11 @@ export function insertHeartbeat(db: sqlite3.Database, heartbeat: Heartbeat) {
         INSERT INTO heartbeats (
             id, timestamp, created_at, entity, type, category, time,
             is_write, project, project_root_count, branch, language,
-            dependencies, machine_name_id
+            dependencies, machine_name_id, activity_type, has_file_activity, has_agent_activity
         ) VALUES (
             ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
-            ?, ?
+            ?, ?, ?, ?, ?
         )
     `, [
         heartbeat.id,
@@ -98,7 +110,10 @@ export function insertHeartbeat(db: sqlite3.Database, heartbeat: Heartbeat) {
         heartbeat.branch ?? null,
         heartbeat.language ?? null,
         heartbeat.dependencies ? JSON.stringify(heartbeat.dependencies) : null,
-        heartbeat.machine_name_id ?? null
+        heartbeat.machine_name_id ?? null,
+        heartbeat.activity_type,
+        heartbeat.has_file_activity ? 1 : 0,
+        heartbeat.has_agent_activity ? 1 : 0
     ]);
 }
 
@@ -319,6 +334,9 @@ function deserializeHeartbeat(row: any): Heartbeat {
     return {
         ...row,
         is_write: row.is_write === 1,
-        dependencies: row.dependencies ? JSON.parse(row.dependencies) : undefined
+        dependencies: row.dependencies ? JSON.parse(row.dependencies) : undefined,
+        activity_type: row.activity_type || 'coding',
+        has_file_activity: row.has_file_activity === 1,
+        has_agent_activity: row.has_agent_activity === 1
     };
 }
