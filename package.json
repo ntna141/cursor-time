@@ -13,14 +13,7 @@
     "onStartupFinished"
   ],
   "main": "./out/extension.js",
-  "contributes": {
-    "commands": [
-      {
-        "command": "ntna-time.showHeartbeats",
-        "title": "Show Recent Heartbeats"
-      }
-    ]
-  },
+  "contributes": {},
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "node esbuild.config.js --production",

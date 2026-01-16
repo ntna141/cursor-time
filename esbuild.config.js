@@ -16,16 +16,14 @@ const config = {
   logLevel: 'info',
 };
 
-if (isWatch) {
-  esbuild.build({
-    ...config,
-    watch: {
-      onRebuild(error, result) {
-        if (error) console.error('watch build failed:', error);
-        else console.log('watch build succeeded:', result);
-      },
-    },
-  }).catch(() => process.exit(1));
-} else {
-  esbuild.build(config).catch(() => process.exit(1));
+async function main() {
+  if (isWatch) {
+    const ctx = await esbuild.context(config);
+    await ctx.watch();
+    console.log('Watching for changes...');
+  } else {
+    await esbuild.build(config);
+  }
 }
+
+main().catch(() => process.exit(1));
