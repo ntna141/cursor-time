@@ -29,6 +29,8 @@ export interface Session {
     durationMs: number;
     heartbeats: number;
     projects: string[];
+    codingMs: number;
+    planningMs: number;
 }
 
 export interface DaySessionSummary {
@@ -36,6 +38,8 @@ export interface DaySessionSummary {
     sessionCount: number;
     totalTimeMs: number;
     sessions: Session[];
+    totalCodingMs: number;
+    totalPlanningMs: number;
 }
 
 export interface TodoItem {
@@ -407,16 +411,28 @@ export function getDateRange(dateKey: string): { start: number; end: number } {
 }
 
 const SESSION_GAP_THRESHOLD_MS = 20 * 60 * 1000;
+const HEARTBEAT_INTERVAL_MS = 3000;
 
 function computeSessionsFromHeartbeats(rows: any[]): Session[] {
     if (rows.length === 0) return [];
 
     const sessions: Session[] = [];
-    let currentSession: { start: number; end: number; heartbeats: number; projects: Set<string> } = {
+    const isPlanning = (type: string | null | undefined) => type === 'planning';
+    
+    let currentSession: { 
+        start: number; 
+        end: number; 
+        heartbeats: number; 
+        projects: Set<string>;
+        codingCount: number;
+        planningCount: number;
+    } = {
         start: rows[0].timestamp,
         end: rows[0].timestamp,
         heartbeats: 1,
-        projects: new Set(rows[0].project ? [rows[0].project] : [])
+        projects: new Set(rows[0].project ? [rows[0].project] : []),
+        codingCount: isPlanning(rows[0].activity_type) ? 0 : 1,
+        planningCount: isPlanning(rows[0].activity_type) ? 1 : 0
     };
 
     for (let i = 1; i < rows.length; i++) {
@@ -429,19 +445,28 @@ function computeSessionsFromHeartbeats(rows: any[]): Session[] {
                 end: currentSession.end,
                 durationMs: currentSession.end - currentSession.start,
                 heartbeats: currentSession.heartbeats,
-                projects: Array.from(currentSession.projects)
+                projects: Array.from(currentSession.projects),
+                codingMs: currentSession.codingCount * HEARTBEAT_INTERVAL_MS,
+                planningMs: currentSession.planningCount * HEARTBEAT_INTERVAL_MS
             });
             currentSession = {
                 start: row.timestamp,
                 end: row.timestamp,
                 heartbeats: 1,
-                projects: new Set(row.project ? [row.project] : [])
+                projects: new Set(row.project ? [row.project] : []),
+                codingCount: isPlanning(row.activity_type) ? 0 : 1,
+                planningCount: isPlanning(row.activity_type) ? 1 : 0
             };
         } else {
             currentSession.end = row.timestamp;
             currentSession.heartbeats++;
             if (row.project) {
                 currentSession.projects.add(row.project);
+            }
+            if (isPlanning(row.activity_type)) {
+                currentSession.planningCount++;
+            } else {
+                currentSession.codingCount++;
             }
         }
     }
@@ -451,7 +476,9 @@ function computeSessionsFromHeartbeats(rows: any[]): Session[] {
         end: currentSession.end,
         durationMs: currentSession.end - currentSession.start,
         heartbeats: currentSession.heartbeats,
-        projects: Array.from(currentSession.projects)
+        projects: Array.from(currentSession.projects),
+        codingMs: currentSession.codingCount * HEARTBEAT_INTERVAL_MS,
+        planningMs: currentSession.planningCount * HEARTBEAT_INTERVAL_MS
     });
 
     return sessions;
@@ -474,18 +501,23 @@ export function getDaySessions(
                 }
 
                 if (cacheRow && !isToday) {
+                    const sessions = JSON.parse(cacheRow.sessions_json);
+                    const totalCodingMs = sessions.reduce((sum: number, s: Session) => sum + (s.codingMs || 0), 0);
+                    const totalPlanningMs = sessions.reduce((sum: number, s: Session) => sum + (s.planningMs || 0), 0);
                     resolve({
                         dateKey: cacheRow.date_key,
                         sessionCount: cacheRow.session_count,
                         totalTimeMs: cacheRow.total_time_ms,
-                        sessions: JSON.parse(cacheRow.sessions_json)
+                        sessions,
+                        totalCodingMs,
+                        totalPlanningMs
                     });
                     return;
                 }
 
                 const { start, end } = getDateRange(dateKey);
                 db.all(
-                    `SELECT id, timestamp, project FROM heartbeats WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC`,
+                    `SELECT id, timestamp, project, activity_type FROM heartbeats WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC`,
                     [start, end],
                     (err, rows: any[]) => {
                         if (err) {
@@ -498,13 +530,17 @@ export function getDaySessions(
                                 dateKey,
                                 sessionCount: 0,
                                 totalTimeMs: 0,
-                                sessions: []
+                                sessions: [],
+                                totalCodingMs: 0,
+                                totalPlanningMs: 0
                             });
                             return;
                         }
 
                         const sessions = computeSessionsFromHeartbeats(rows);
                         const totalTimeMs = sessions.reduce((sum, s) => sum + s.durationMs, 0);
+                        const totalCodingMs = sessions.reduce((sum, s) => sum + s.codingMs, 0);
+                        const totalPlanningMs = sessions.reduce((sum, s) => sum + s.planningMs, 0);
                         const lastHeartbeatId = rows[rows.length - 1].id;
 
                         db.run(
@@ -516,7 +552,9 @@ export function getDaySessions(
                             dateKey,
                             sessionCount: sessions.length,
                             totalTimeMs,
-                            sessions
+                            sessions,
+                            totalCodingMs,
+                            totalPlanningMs
                         });
                     }
                 );
@@ -578,5 +616,49 @@ export function updateTodoCompleted(db: sqlite3.Database, id: string, completed:
 export function deleteTodo(db: sqlite3.Database, id: string): Promise<void> {
     return new Promise((resolve, reject) => {
         db.run(`DELETE FROM todos WHERE id = ?`, [id], (err) => err ? reject(err) : resolve());
+    });
+}
+
+export interface ActivityBreakdown {
+    coding: number;
+    planning: number;
+    total: number;
+}
+
+export function getTodayActivityBreakdown(
+    db: sqlite3.Database,
+    heartbeatIntervalMs: number = 3000
+): Promise<ActivityBreakdown> {
+    return new Promise((resolve, reject) => {
+        const { start, end } = getDateRange(getTodayDateKey());
+        
+        db.all(
+            `SELECT activity_type, COUNT(*) as count FROM heartbeats WHERE timestamp BETWEEN ? AND ? GROUP BY activity_type`,
+            [start, end],
+            (err, rows: any[]) => {
+                if (err) {
+                    reject(err);
+                    return;
+                }
+
+                let coding = 0;
+                let planning = 0;
+
+                for (const row of rows) {
+                    const timeMs = row.count * heartbeatIntervalMs;
+                    if (row.activity_type === 'planning') {
+                        planning = timeMs;
+                    } else {
+                        coding += timeMs;
+                    }
+                }
+
+                resolve({
+                    coding,
+                    planning,
+                    total: coding + planning
+                });
+            }
+        );
     });
 }

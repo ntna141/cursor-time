@@ -161,7 +161,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private getTimelineHtml(sessions: Array<{ start: number; end: number; durationMs: number; projects: string[] }>): string {
+    private getTimelineHtml(sessions: Array<{ start: number; end: number; durationMs: number; projects: string[]; codingMs: number; planningMs: number }>): string {
         const filteredSessions = sessions.filter(s => s.durationMs >= 60000);
         
         if (filteredSessions.length === 0) {
@@ -183,8 +183,14 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             const duration = this.formatDuration(session.durationMs);
             const position = index % 2 === 0 ? 'top' : 'bottom';
             
+            const totalActivity = (session.codingMs || 0) + (session.planningMs || 0);
+            const codingPercent = totalActivity > 0 ? ((session.codingMs || 0) / totalActivity) * 100 : 100;
+            
             return `
-                <div class="timeline-bar" style="left: ${startPercent}%; width: ${widthPercent}%;"></div>
+                <div class="timeline-bar-container" style="left: ${startPercent}%; width: ${widthPercent}%;">
+                    <div class="timeline-bar coding" style="width: ${codingPercent}%;"></div>
+                    <div class="timeline-bar planning" style="width: ${100 - codingPercent}%;"></div>
+                </div>
                 <span class="time-label ${position}" style="left: ${centerPercent}%">${duration}</span>
             `;
         }).join('');
@@ -272,6 +278,31 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             font-size: 12px;
             color: #565f89;
         }
+        .activity-breakdown {
+            display: flex;
+            gap: 12px;
+            margin-top: 18px;
+            font-size: 12px;
+        }
+        .activity-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .activity-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 2px;
+        }
+        .activity-dot.coding {
+            background: #9ece6a;
+        }
+        .activity-dot.planning {
+            background: #bb9af7;
+        }
+        .activity-label {
+            color: #9aa5ce;
+        }
         .section-header {
             color: #9aa5ce;
             font-size: 0.9em;
@@ -295,12 +326,21 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             margin-top: 25px;
             margin-bottom: 25px;
         }
-        .timeline-bar {
+        .timeline-bar-container {
             position: absolute;
             top: 0;
             bottom: 0;
-            background: #9ece6a;
+            display: flex;
             min-width: 2px;
+        }
+        .timeline-bar {
+            height: 100%;
+        }
+        .timeline-bar.coding {
+            background: #9ece6a;
+        }
+        .timeline-bar.planning {
+            background: #bb9af7;
         }
         .time-label {
             position: absolute;
@@ -419,6 +459,16 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         <div class="stats-row">
             <span class="total-time">${this.formatDuration(summary.totalTimeMs)}</span>
             <span class="session-count">(${filteredSessions.length} session${filteredSessions.length !== 1 ? 's' : ''})</span>
+        </div>
+        <div class="activity-breakdown">
+            <div class="activity-item">
+                <span class="activity-dot coding"></span>
+                <span class="activity-label">coding</span>
+            </div>
+            <div class="activity-item">
+                <span class="activity-dot planning"></span>
+                <span class="activity-label">planning</span>
+            </div>
         </div>
     </div>
     <h2 class="section-header">sessions</h2>
