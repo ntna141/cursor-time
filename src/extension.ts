@@ -8,6 +8,7 @@ import { SessionsPanelProvider } from './panels/sessionsPanel';
 
 let dbInstance: sqlite3.Database | null = null;
 let aggregator: HeartbeatAggregator | null = null;
+let sessionsPanel: SessionsPanelProvider | null = null;
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('EXTENSION: "ntna-time" is now active!');
@@ -37,11 +38,11 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    const sessionsPanelProvider = new SessionsPanelProvider(dbInstance);
+    sessionsPanel = new SessionsPanelProvider(dbInstance);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(
             SessionsPanelProvider.viewType,
-            sessionsPanelProvider,
+            sessionsPanel,
             {
                 webviewOptions: {
                     retainContextWhenHidden: true
@@ -50,10 +51,10 @@ export async function activate(context: vscode.ExtensionContext) {
         )
     );
     
-    sessionsPanelProvider.preload();
+    sessionsPanel.preload();
     
     aggregator.onHeartbeat(() => {
-        sessionsPanelProvider.invalidateToday();
+        sessionsPanel!.invalidateToday();
     });
     
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -61,11 +62,12 @@ export async function activate(context: vscode.ExtensionContext) {
     statusBarItem.tooltip = "EXTENSION: ntna-time is active";
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
-    
-    vscode.window.showInformationMessage('EXTENSION: ntna-time is now active!');
 }
 
-export function deactivate() {
+export async function deactivate() {
+    if (sessionsPanel) {
+        await sessionsPanel.dispose();
+    }
     if (aggregator) {
         aggregator.dispose();
     }

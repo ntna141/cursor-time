@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import sqlite3 from 'sqlite3';
-import { getDaySessions, getTodayDateKey, DaySessionSummary, TodoItem, getTodosByDate } from '../storage';
+import { getDaySessions, getTodayDateKey, DaySessionSummary, TodoItem } from '../storage';
 import { TodoHandler } from '../handlers/todoHandler';
 
 export class SessionsPanelProvider implements vscode.WebviewViewProvider {
@@ -33,7 +33,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         const todayKey = getTodayDateKey();
         const [summary, todos] = await Promise.all([
             getDaySessions(this.db, todayKey),
-            getTodosByDate(this.db, todayKey)
+            this.todoHandler.getTodos(todayKey)
         ]);
         const html = this.getHtml(summary, todos, true);
         this.cache.set(todayKey, { summary, todos, html });
@@ -138,7 +138,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         const isToday = this.currentDateKey === getTodayDateKey();
         const [summary, todos] = await Promise.all([
             getDaySessions(this.db, this.currentDateKey),
-            getTodosByDate(this.db, this.currentDateKey)
+            this.todoHandler.getTodos(this.currentDateKey)
         ]);
         const html = this.getHtml(summary, todos, isToday);
         
@@ -481,5 +481,9 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#039;');
+    }
+
+    public async dispose(): Promise<void> {
+        await this.todoHandler.flush();
     }
 }
