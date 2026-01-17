@@ -87,7 +87,8 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                 await this.updateView();
             } else if (await this.todoHandler.handleMessage(message, this.currentDateKey)) {
                 this.cache.delete(this.currentDateKey);
-                await this.updateView();
+                const shouldFocus = message.command === 'addTodo';
+                await this.updateView(shouldFocus);
             }
         });
     }
@@ -126,11 +127,11 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     }
 
-    public async updateView() {
+    public async updateView(shouldFocusTodoInput: boolean = false) {
         if (!this._view) return;
 
         const cached = this.cache.get(this.currentDateKey);
-        if (cached) {
+        if (cached && !shouldFocusTodoInput) {
             this._view.webview.html = cached.html;
             return;
         }
@@ -140,9 +141,9 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             getDaySessions(this.db, this.currentDateKey),
             this.todoHandler.getTodos(this.currentDateKey)
         ]);
-        const html = this.getHtml(summary, todos, isToday);
+        const html = this.getHtml(summary, todos, isToday, shouldFocusTodoInput);
         
-        if (!isToday && this.isWithinCacheWindow(this.currentDateKey)) {
+        if (!isToday && this.isWithinCacheWindow(this.currentDateKey) && !shouldFocusTodoInput) {
             this.cache.set(this.currentDateKey, { summary, todos, html });
         }
         
@@ -204,7 +205,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         `;
     }
 
-    private getHtml(summary: DaySessionSummary, todos: TodoItem[], isToday: boolean): string {
+    private getHtml(summary: DaySessionSummary, todos: TodoItem[], isToday: boolean, shouldFocusTodoInput: boolean = false): string {
         const filteredSessions = summary.sessions.filter(s => s.durationMs >= 60000);
         const timelineHtml = this.getTimelineHtml(summary.sessions);
 
@@ -494,7 +495,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         
         const todoInput = document.getElementById('todoInput');
         if (todoInput) {
-            todoInput.focus();
+            ${shouldFocusTodoInput ? 'todoInput.focus();' : ''}
             todoInput.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') {
                     const text = todoInput.value.trim();
@@ -505,6 +506,16 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                 }
             });
         }
+        
+        window.addEventListener('message', (event) => {
+            const message = event.data;
+            if (message.command === 'focusTodoInput') {
+                const input = document.getElementById('todoInput');
+                if (input) {
+                    input.focus();
+                }
+            }
+        });
         
         document.querySelectorAll('.todo-checkbox').forEach(checkbox => {
             checkbox.addEventListener('change', (e) => {
