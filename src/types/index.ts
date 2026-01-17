@@ -11,6 +11,7 @@ export interface ActivityEvent {
     project?: string;
     language?: string;
     category?: string;
+    sourceFile?: string;
 }
 
 export interface ActivityEmitter extends EventEmitter {

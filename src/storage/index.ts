@@ -21,6 +21,7 @@ export interface Heartbeat {
     activity_type: ActivityType;
     has_file_activity: boolean;
     has_agent_activity: boolean;
+    source_file?: string;
 }
 
 export interface Session {
@@ -126,6 +127,7 @@ export function createDatabase(dir: string): Promise<sqlite3.Database> {
                         db.run(`ALTER TABLE heartbeats ADD COLUMN activity_type TEXT DEFAULT 'coding'`, () => {});
                         db.run(`ALTER TABLE heartbeats ADD COLUMN has_file_activity INTEGER DEFAULT 1`, () => {});
                         db.run(`ALTER TABLE heartbeats ADD COLUMN has_agent_activity INTEGER DEFAULT 0`, () => {});
+                        db.run(`ALTER TABLE heartbeats ADD COLUMN source_file TEXT`, () => {});
                         db.run(`CREATE INDEX IF NOT EXISTS idx_timestamp ON heartbeats(timestamp DESC)`);
                         db.run(`CREATE INDEX IF NOT EXISTS idx_entity ON heartbeats(entity)`);
                         db.run(`CREATE INDEX IF NOT EXISTS idx_project ON heartbeats(project)`);
@@ -145,11 +147,11 @@ export function insertHeartbeat(db: sqlite3.Database, heartbeat: Heartbeat) {
         INSERT INTO heartbeats (
             id, timestamp, created_at, entity, type, category, time,
             is_write, project, project_root_count, branch, language,
-            dependencies, machine_name_id, activity_type, has_file_activity, has_agent_activity
+            dependencies, machine_name_id, activity_type, has_file_activity, has_agent_activity, source_file
         ) VALUES (
             ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?
         )
     `, [
         heartbeat.id,
@@ -168,7 +170,8 @@ export function insertHeartbeat(db: sqlite3.Database, heartbeat: Heartbeat) {
         heartbeat.machine_name_id ?? null,
         heartbeat.activity_type,
         heartbeat.has_file_activity ? 1 : 0,
-        heartbeat.has_agent_activity ? 1 : 0
+        heartbeat.has_agent_activity ? 1 : 0,
+        heartbeat.source_file ?? null
     ], () => {
         invalidateTodayCache(db);
     });
@@ -394,7 +397,8 @@ function deserializeHeartbeat(row: any): Heartbeat {
         dependencies: row.dependencies ? JSON.parse(row.dependencies) : undefined,
         activity_type: row.activity_type || 'coding',
         has_file_activity: row.has_file_activity === 1,
-        has_agent_activity: row.has_agent_activity === 1
+        has_agent_activity: row.has_agent_activity === 1,
+        source_file: row.source_file || undefined
     };
 }
 

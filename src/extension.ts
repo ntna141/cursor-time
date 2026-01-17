@@ -148,6 +148,9 @@ export async function activate(context: vscode.ExtensionContext) {
                 
                 outputChannel.appendLine(`[${dateStr} ${timeStr}] ${timeLabel.padEnd(12)} | ${entityName.padEnd(30)} | ${languageStr} | ${projectStr} | ${activityLabel}`);
                 outputChannel.appendLine(`  └─ Entity: ${hb.entity}`);
+                if (hb.type === 'agent' && hb.source_file) {
+                    outputChannel.appendLine(`  └─ Source file: ${hb.source_file}`);
+                }
                 if (hb.type === 'file') {
                     outputChannel.appendLine(`  └─ Write: ${hb.is_write ? 'yes' : 'no'}`);
                 }

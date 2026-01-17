@@ -65,7 +65,8 @@ export class HeartbeatAggregator {
             language: mostRecentEvent.language,
             activity_type: activityType,
             has_file_activity: hasFileActivity,
-            has_agent_activity: hasAgentActivity
+            has_agent_activity: hasAgentActivity,
+            source_file: mostRecentEvent.sourceFile
         };
 
         insertHeartbeat(this.db, heartbeat);

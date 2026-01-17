@@ -69,6 +69,8 @@ function watchAgentFolder(
             
             outputChannel.appendLine(`[cursor-watcher] Agent activity: ${eventType} - ${filename}`);
             
+            const sourceFilePath = path.join(dirPath, filename);
+            
             const event: ActivityEvent = {
                 source: 'agent',
                 timestamp: Date.now(),
@@ -76,7 +78,8 @@ function watchAgentFolder(
                 isWrite: true,
                 project: projectName,
                 language: 'agent',
-                category: 'coding'
+                category: 'coding',
+                sourceFile: sourceFilePath
             };
             
             emitter.emit('activity', event);
