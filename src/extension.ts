@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import sqlite3 from 'sqlite3';
-import { createDirectory, createDatabase, getTodayActivityBreakdown } from './storage';
+import * as path from 'path';
+import { createDirectory, createDatabase, getTodayActivityBreakdown, getRecentHeartbeats } from './storage';
 import { setupFileWatcher } from './watchers/fileWatcher';
 import { setupCursorWatcher } from './watchers/cursorWatcher';
 import { HeartbeatAggregator } from './aggregators/heartbeatAggregator';
@@ -99,6 +100,68 @@ export async function activate(context: vscode.ExtensionContext) {
         sessionsPanel!.invalidateToday();
         updateStatusBar();
     });
+
+    const showHeartbeatsCommand = vscode.commands.registerCommand('ntna-time.showHeartbeats', async () => {
+        if (!dbInstance) {
+            vscode.window.showErrorMessage('Database not initialized');
+            return;
+        }
+
+        try {
+            const heartbeats = await getRecentHeartbeats(dbInstance, 50);
+            
+            outputChannel.show(true);
+            outputChannel.appendLine('\n=== Recent Heartbeats (Last 50) ===');
+            outputChannel.appendLine('');
+
+            if (heartbeats.length === 0) {
+                outputChannel.appendLine('No heartbeats found.');
+                return;
+            }
+
+            const now = Date.now();
+            for (const hb of heartbeats) {
+                const timeAgo = now - hb.timestamp;
+                const minutesAgo = Math.floor(timeAgo / 60000);
+                const hoursAgo = Math.floor(minutesAgo / 60);
+                
+                let timeLabel = '';
+                if (hoursAgo > 0) {
+                    timeLabel = `${hoursAgo}h ${minutesAgo % 60}m ago`;
+                } else if (minutesAgo > 0) {
+                    timeLabel = `${minutesAgo}m ago`;
+                } else {
+                    timeLabel = 'just now';
+                }
+
+                const date = new Date(hb.timestamp);
+                const timeStr = date.toLocaleTimeString();
+                const dateStr = date.toLocaleDateString();
+                
+                const entityName = hb.type === 'agent' ? 'agent chat' : path.basename(hb.entity);
+                const activityLabel = hb.has_file_activity && hb.has_agent_activity 
+                    ? 'coding+agent' 
+                    : hb.activity_type;
+                
+                const languageStr = (hb.language || 'unknown').padEnd(10);
+                const projectStr = (hb.project || 'no project').padEnd(20);
+                
+                outputChannel.appendLine(`[${dateStr} ${timeStr}] ${timeLabel.padEnd(12)} | ${entityName.padEnd(30)} | ${languageStr} | ${projectStr} | ${activityLabel}`);
+                outputChannel.appendLine(`  └─ Entity: ${hb.entity}`);
+                if (hb.type === 'file') {
+                    outputChannel.appendLine(`  └─ Write: ${hb.is_write ? 'yes' : 'no'}`);
+                }
+                outputChannel.appendLine('');
+            }
+            
+            outputChannel.appendLine('=== End of Heartbeats ===\n');
+        } catch (err) {
+            vscode.window.showErrorMessage(`Failed to fetch heartbeats: ${err}`);
+            outputChannel.appendLine(`Error: ${err}`);
+        }
+    });
+
+    context.subscriptions.push(showHeartbeatsCommand);
 }
 
 export async function deactivate() {

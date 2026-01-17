@@ -31,7 +31,14 @@
           "name": "Sessions"
         }
       ]
-    }
+    },
+    "commands": [
+      {
+        "command": "ntna-time.showHeartbeats",
+        "title": "Show Recent Heartbeats",
+        "category": "ntna-time"
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

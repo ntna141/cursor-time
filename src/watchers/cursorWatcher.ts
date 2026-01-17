@@ -4,6 +4,8 @@ import * as fs from 'fs';
 import { EventEmitter } from 'events';
 import { ActivityEvent, ActivityEmitter } from '../types';
 
+const AGENT_ACTIVITY_FOLDERS = ['agent-transcripts', 'agent-tools'];
+
 export function setupCursorWatcher(
     context: vscode.ExtensionContext,
     outputChannel: vscode.OutputChannel
@@ -25,17 +27,17 @@ export function setupCursorWatcher(
         const cursorProjectPath = path.join(homeDir, '.cursor', 'projects', projectName);
 
         outputChannel.appendLine(`[cursor-watcher] Checking: ${cursorProjectPath}`);
+        
         if (fs.existsSync(cursorProjectPath)) {
-            outputChannel.appendLine(`[cursor-watcher] Watching: ${cursorProjectPath}`);
-            watchDirectoryRecursive(cursorProjectPath, watchers, emitter, folder.name, outputChannel);
+            for (const folderName of AGENT_ACTIVITY_FOLDERS) {
+                const activityPath = path.join(cursorProjectPath, folderName);
+                if (fs.existsSync(activityPath)) {
+                    outputChannel.appendLine(`[cursor-watcher] Watching: ${activityPath}`);
+                    watchAgentFolder(activityPath, watchers, emitter, folder.name, outputChannel);
+                }
+            }
         } else {
             outputChannel.appendLine(`[cursor-watcher] Not found: ${cursorProjectPath}`);
-        }
-
-        const workspaceCursorPath = path.join(workspacePath, '.cursor');
-        if (fs.existsSync(workspaceCursorPath)) {
-            outputChannel.appendLine(`[cursor-watcher] Also watching workspace: ${workspaceCursorPath}`);
-            watchDirectoryRecursive(workspaceCursorPath, watchers, emitter, folder.name, outputChannel);
         }
     }
 
@@ -48,18 +50,24 @@ export function setupCursorWatcher(
     return emitter;
 }
 
-function watchDirectoryRecursive(
+function watchAgentFolder(
     dirPath: string,
     watchers: fs.FSWatcher[],
     emitter: ActivityEmitter,
     projectName: string,
     outputChannel: vscode.OutputChannel
 ) {
-    if (!fs.existsSync(dirPath)) return;
-
     try {
-        const watcher = fs.watch(dirPath, { recursive: true }, (eventType, filename) => {
-            outputChannel.appendLine(`[cursor-watcher] Event: ${eventType} - ${filename}`);
+        const watcher = fs.watch(dirPath, (eventType, filename) => {
+            if (!vscode.window.state.focused) {
+                return;
+            }
+            
+            if (!filename || !filename.endsWith('.txt')) {
+                return;
+            }
+            
+            outputChannel.appendLine(`[cursor-watcher] Agent activity: ${eventType} - ${filename}`);
             
             const event: ActivityEvent = {
                 source: 'agent',
@@ -74,32 +82,7 @@ function watchDirectoryRecursive(
             emitter.emit('activity', event);
         });
         watchers.push(watcher);
-    } catch {
-        try {
-            const watcher = fs.watch(dirPath, (eventType, filename) => {
-                outputChannel.appendLine(`[cursor-watcher] Event: ${eventType} - ${filename}`);
-                
-                const event: ActivityEvent = {
-                    source: 'agent',
-                    timestamp: Date.now(),
-                    entity: 'cursor-agent-chat',
-                    isWrite: true,
-                    project: projectName,
-                    language: 'agent',
-                    category: 'coding'
-                };
-                
-                emitter.emit('activity', event);
-            });
-            watchers.push(watcher);
-
-            const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-            for (const entry of entries) {
-                if (entry.isDirectory()) {
-                    watchDirectoryRecursive(path.join(dirPath, entry.name), watchers, emitter, projectName, outputChannel);
-                }
-            }
-        } catch {
-        }
+    } catch (err) {
+        outputChannel.appendLine(`[cursor-watcher] Failed to watch: ${dirPath}`);
     }
 }
