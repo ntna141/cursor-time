@@ -1,9 +1,17 @@
 .vscode/**
 .vscode-test/**
 src/**
+examples/**
+install.sh
+esbuild.config.js
+package-lock.json
+*.vsix
 .gitignore
 .yarnrc
 vsc-extension-quickstart.md
 **/tsconfig.json
 **/*.map
 **/*.ts
+.git/**
+*.log
+.DS_Store

@@ -361,7 +361,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         }
         .todo-item {
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             gap: 8px;
             padding: 4px 0;
         }
@@ -377,6 +377,8 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             font-size: 1.1em;
             width: 16px;
             text-align: center;
+            flex-shrink: 0;
+            margin-top: 2px;
         }
         .todo-checkbox {
             appearance: none;
@@ -388,7 +390,9 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             background: transparent;
             cursor: pointer;
             margin: 0;
+            margin-top: 2px;
             position: relative;
+            flex-shrink: 0;
         }
         .todo-checkbox:checked::after {
             content: '×';
@@ -404,6 +408,9 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             flex: 1;
             font-size: 1.1em;
             color: #c0caf5;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            line-height: 1.4;
         }
         .todo-delete {
             background: transparent;
@@ -413,6 +420,8 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             font-size: 1.17em;
             padding: 0 3px;
             opacity: 0;
+            flex-shrink: 0;
+            margin-top: 2px;
         }
         .todo-item:hover .todo-delete {
             opacity: 0.6;

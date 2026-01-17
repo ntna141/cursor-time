@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ActivityEvent, ActivityType } from '../types';
 import { insertHeartbeat, Heartbeat } from '../storage';
 
-const HEARTBEAT_INTERVAL_MS = 3000;
+const HEARTBEAT_INTERVAL_MS = 60000; // agents often sends final summary, so if the threshold is low, every heartbeat will basically be an agent activity
 
 export class HeartbeatAggregator {
     private eventBuffer: ActivityEvent[] = [];
@@ -42,14 +42,25 @@ export class HeartbeatAggregator {
     private flush() {
         if (this.eventBuffer.length === 0) return;
 
-        const hasFileActivity = this.eventBuffer.some(e => e.source === 'file');
-        const hasAgentActivity = this.eventBuffer.some(e => e.source === 'agent');
+        const fileEvents = this.eventBuffer.filter(e => e.source === 'file');
+        const agentEvents = this.eventBuffer.filter(e => e.source === 'agent');
+        
+        const hasFileActivity = fileEvents.length > 0;
+        const hasAgentActivity = agentEvents.length > 0;
 
         const activityType: ActivityType = hasFileActivity ? 'coding' : 'planning';
 
-        const mostRecentEvent = this.eventBuffer.reduce((latest, current) => 
-            current.timestamp > latest.timestamp ? current : latest
-        );
+        const mostRecentFileEvent = hasFileActivity 
+            ? fileEvents.reduce((latest, current) => 
+                current.timestamp > latest.timestamp ? current : latest)
+            : null;
+        
+        const mostRecentAgentEvent = hasAgentActivity
+            ? agentEvents.reduce((latest, current) =>
+                current.timestamp > latest.timestamp ? current : latest)
+            : null;
+
+        const primaryEvent = mostRecentFileEvent || mostRecentAgentEvent!;
 
         const isWrite = this.eventBuffer.some(e => e.isWrite);
 
@@ -57,16 +68,16 @@ export class HeartbeatAggregator {
             id: uuidv4(),
             timestamp: Date.now(),
             created_at: new Date().toISOString(),
-            entity: mostRecentEvent.entity,
-            type: mostRecentEvent.source === 'agent' ? 'agent' : 'file',
-            category: mostRecentEvent.category || 'coding',
+            entity: primaryEvent.entity,
+            type: primaryEvent.source === 'agent' ? 'agent' : 'file',
+            category: primaryEvent.category || 'coding',
             is_write: isWrite,
-            project: mostRecentEvent.project,
-            language: mostRecentEvent.language,
+            project: primaryEvent.project,
+            language: primaryEvent.language,
             activity_type: activityType,
             has_file_activity: hasFileActivity,
             has_agent_activity: hasAgentActivity,
-            source_file: mostRecentEvent.sourceFile
+            source_file: primaryEvent.sourceFile
         };
 
         insertHeartbeat(this.db, heartbeat);

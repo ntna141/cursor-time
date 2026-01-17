@@ -3,6 +3,10 @@
   "displayName": "ntna-time",
   "description": "",
   "version": "0.0.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ntna141/ntna-time.git"
+  },
   "engines": {
     "vscode": "^1.74.0"
   },
@@ -43,7 +47,8 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "node esbuild.config.js --production",
-    "watch": "node esbuild.config.js --watch"
+    "watch": "node esbuild.config.js --watch",
+    "install-ext": "./install.sh"
   },
   "devDependencies": {
     "@types/node": "^16.18.126",
