@@ -555,20 +555,28 @@ export function getTodosByDate(
     });
 }
 
-export function insertTodo(db: sqlite3.Database, todo: TodoItem): void {
-    db.run(
-        `INSERT INTO todos (id, date_key, text, completed, created_at) VALUES (?, ?, ?, ?, ?)`,
-        [todo.id, todo.dateKey, todo.text, todo.completed ? 1 : 0, todo.createdAt]
-    );
+export function insertTodo(db: sqlite3.Database, todo: TodoItem): Promise<void> {
+    return new Promise((resolve, reject) => {
+        db.run(
+            `INSERT INTO todos (id, date_key, text, completed, created_at) VALUES (?, ?, ?, ?, ?)`,
+            [todo.id, todo.dateKey, todo.text, todo.completed ? 1 : 0, todo.createdAt],
+            (err) => err ? reject(err) : resolve()
+        );
+    });
 }
 
-export function updateTodoCompleted(db: sqlite3.Database, id: string, completed: boolean): void {
-    db.run(
-        `UPDATE todos SET completed = ? WHERE id = ?`,
-        [completed ? 1 : 0, id]
-    );
+export function updateTodoCompleted(db: sqlite3.Database, id: string, completed: boolean): Promise<void> {
+    return new Promise((resolve, reject) => {
+        db.run(
+            `UPDATE todos SET completed = ? WHERE id = ?`,
+            [completed ? 1 : 0, id],
+            (err) => err ? reject(err) : resolve()
+        );
+    });
 }
 
-export function deleteTodo(db: sqlite3.Database, id: string): void {
-    db.run(`DELETE FROM todos WHERE id = ?`, [id]);
+export function deleteTodo(db: sqlite3.Database, id: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+        db.run(`DELETE FROM todos WHERE id = ?`, [id], (err) => err ? reject(err) : resolve());
+    });
 }

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import sqlite3 from 'sqlite3';
-import { getDaySessions, getTodayDateKey, DaySessionSummary, TodoItem, getTodosByDate, insertTodo, updateTodoCompleted, deleteTodo } from '../storage';
+import { getDaySessions, getTodayDateKey, DaySessionSummary, TodoItem, getTodosByDate } from '../storage';
+import { TodoHandler } from '../handlers/todoHandler';
 
 export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'ntna-time.sessionsView';
@@ -10,10 +11,12 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     private currentDateKey: string;
     private cache: Map<string, { summary: DaySessionSummary; todos: TodoItem[]; html: string }> = new Map();
     private isReady: boolean = false;
+    private todoHandler: TodoHandler;
 
     constructor(db: sqlite3.Database) {
         this.db = db;
         this.currentDateKey = getTodayDateKey();
+        this.todoHandler = new TodoHandler(db);
     }
 
     private isWithinCacheWindow(dateKey: string): boolean {
@@ -82,31 +85,11 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             } else if (message.command === 'nextDay') {
                 this.currentDateKey = this.getOffsetDateKey(this.currentDateKey, 1);
                 await this.updateView();
-            } else if (message.command === 'addTodo') {
-                const todo: TodoItem = {
-                    id: this.generateId(),
-                    dateKey: this.currentDateKey,
-                    text: message.text,
-                    completed: false,
-                    createdAt: Date.now()
-                };
-                insertTodo(this.db, todo);
-                this.cache.delete(this.currentDateKey);
-                await this.updateView();
-            } else if (message.command === 'toggleTodo') {
-                updateTodoCompleted(this.db, message.id, message.completed);
-                this.cache.delete(this.currentDateKey);
-                await this.updateView();
-            } else if (message.command === 'deleteTodo') {
-                deleteTodo(this.db, message.id);
+            } else if (await this.todoHandler.handleMessage(message, this.currentDateKey)) {
                 this.cache.delete(this.currentDateKey);
                 await this.updateView();
             }
         });
-    }
-
-    private generateId(): string {
-        return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     }
 
     private getLoadingHtml(): string {
@@ -178,36 +161,54 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private formatTime(timestamp: number): string {
-        const date = new Date(timestamp);
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    private getTimelineHtml(sessions: Array<{ start: number; end: number; durationMs: number; projects: string[] }>): string {
+        const filteredSessions = sessions.filter(s => s.durationMs >= 60000);
+        
+        if (filteredSessions.length === 0) {
+            return '<div class="no-sessions">No sessions recorded</div>';
+        }
+
+        const firstSession = filteredSessions[0];
+        const dayStart = new Date(firstSession.start);
+        dayStart.setHours(0, 0, 0, 0);
+        const dayStartMs = dayStart.getTime();
+        const msPerDay = 24 * 60 * 60 * 1000;
+
+        const bars = filteredSessions.map((session, index) => {
+            const startPercent = ((session.start - dayStartMs) / msPerDay) * 100;
+            const endPercent = ((session.end - dayStartMs) / msPerDay) * 100;
+            const widthPercent = endPercent - startPercent;
+            const centerPercent = startPercent + widthPercent / 2;
+            
+            const duration = this.formatDuration(session.durationMs);
+            const position = index % 2 === 0 ? 'top' : 'bottom';
+            
+            return `
+                <div class="timeline-bar" style="left: ${startPercent}%; width: ${widthPercent}%;"></div>
+                <span class="time-label ${position}" style="left: ${centerPercent}%">${duration}</span>
+            `;
+        }).join('');
+
+        return `
+            <div class="timeline-container">
+                <div class="timeline-track">
+                    ${bars}
+                </div>
+            </div>
+        `;
     }
 
     private getHtml(summary: DaySessionSummary, todos: TodoItem[], isToday: boolean): string {
         const filteredSessions = summary.sessions.filter(s => s.durationMs >= 60000);
-        const latestSessions = filteredSessions.slice(-3);
-        const sessionsHtml = latestSessions.length > 0
-            ? latestSessions.map((session, index) => {
-                const sessionNumber = filteredSessions.length - latestSessions.length + index + 1;
-                return `
-                <div class="session-item">
-                    <div class="item-content">
-                        <span class="item-title">Session ${sessionNumber}</span>
-                        <span class="item-type">${this.formatTime(session.start)} - ${this.formatTime(session.end)}</span>
-                        ${session.projects.length > 0 ? `<span class="item-projects">${session.projects.join(', ')}</span>` : ''}
-                    </div>
-                    <div class="item-duration">${this.formatDuration(session.durationMs)}</div>
-                </div>
-            `;}).join('')
-            : '<div class="no-sessions">No sessions recorded</div>';
+        const timelineHtml = this.getTimelineHtml(summary.sessions);
 
         const todosHtml = todos.map(todo => `
-                <div class="todo-item ${todo.completed ? 'completed' : ''}">
-                    ${isToday ? `<input type="checkbox" class="todo-checkbox" data-id="${todo.id}" ${todo.completed ? 'checked' : ''}>` : `<span class="todo-bullet">${todo.completed ? '×' : '•'}</span>`}
-                    <span class="todo-text">${this.escapeHtml(todo.text)}</span>
-                    ${isToday ? `<button class="todo-delete" data-id="${todo.id}">&times;</button>` : ''}
-                </div>
-            `).join('');
+            <div class="todo-item ${todo.completed ? 'completed' : ''}">
+                ${isToday ? `<input type="checkbox" class="todo-checkbox" data-id="${todo.id}" ${todo.completed ? 'checked' : ''}>` : `<span class="todo-bullet">${todo.completed ? '×' : '•'}</span>`}
+                <span class="todo-text">${this.escapeHtml(todo.text)}</span>
+                ${isToday ? `<button class="todo-delete" data-id="${todo.id}">&times;</button>` : ''}
+            </div>
+        `).join('');
 
         return `<!DOCTYPE html>
 <html lang="en">
@@ -278,55 +279,41 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             padding-bottom: 4px;
             border-bottom: 1px solid #414868;
         }
-        .sessions-list {
-            margin-top: 0;
-            max-height: 25vh;
-            overflow-y: auto;
-        }
-        .session-item {
-            padding: 6px 0;
-            border-bottom: 1px solid #414868;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .session-item:last-child {
-            border-bottom: none;
-        }
-        .item-content {
-            flex: 1;
-            display: flex;
-            flex-wrap: wrap;
-            align-items: baseline;
-            gap: 6px;
-        }
-        .item-title {
-            color: #c0caf5;
-            font-size: 0.8em;
-            font-weight: bold;
-        }
-        .item-type {
-            color: #9aa5ce;
-            font-size: 0.7em;
-        }
-        .item-projects {
-            color: #565f89;
-            font-size: 0.65em;
-            font-style: italic;
-            width: 100%;
-        }
-        .item-duration {
-            color: #9ece6a;
-            font-size: 0.75em;
-            font-weight: bold;
-            white-space: nowrap;
-            margin-left: 8px;
-        }
         .no-sessions {
             text-align: center;
             color: #565f89;
             padding: 15px 10px;
             font-size: 0.8em;
+        }
+        .timeline-container {
+            margin: 8px 0;
+        }
+        .timeline-track {
+            position: relative;
+            height: 24px;
+            background: #24283b;
+            margin-top: 25px;
+            margin-bottom: 25px;
+        }
+        .timeline-bar {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            background: #9ece6a;
+            min-width: 2px;
+        }
+        .time-label {
+            position: absolute;
+            transform: translateX(-50%);
+            font-size: 9px;
+            color: #9aa5ce;
+            white-space: nowrap;
+        }
+        .time-label.top {
+            top: -14px;
+        }
+        .time-label.bottom {
+            bottom: -14px;
         }
         .todos-list {
             margin-top: 0;
@@ -334,8 +321,8 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         .todo-item {
             display: flex;
             align-items: center;
-            gap: 6px;
-            padding: 3px 0;
+            gap: 8px;
+            padding: 4px 0;
         }
         .todo-item.completed .todo-text {
             text-decoration: line-through;
@@ -346,15 +333,15 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         }
         .todo-bullet {
             color: #7aa2f7;
-            font-size: 0.85em;
-            width: 12px;
+            font-size: 1.1em;
+            width: 16px;
             text-align: center;
         }
         .todo-checkbox {
             appearance: none;
             -webkit-appearance: none;
-            width: 10px;
-            height: 10px;
+            width: 13px;
+            height: 13px;
             border: 1px solid #7aa2f7;
             border-radius: 2px;
             background: transparent;
@@ -368,13 +355,13 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            font-size: 10px;
+            font-size: 13px;
             line-height: 1;
             color: #7aa2f7;
         }
         .todo-text {
             flex: 1;
-            font-size: 0.85em;
+            font-size: 1.1em;
             color: #c0caf5;
         }
         .todo-delete {
@@ -382,8 +369,8 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             border: none;
             color: #f7768e;
             cursor: pointer;
-            font-size: 0.9em;
-            padding: 0 2px;
+            font-size: 1.17em;
+            padding: 0 3px;
             opacity: 0;
         }
         .todo-item:hover .todo-delete {
@@ -395,12 +382,12 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         .todo-input-row {
             display: flex;
             align-items: center;
-            gap: 6px;
-            padding: 3px 0;
+            gap: 8px;
+            padding: 4px 0;
         }
         .todo-input-box {
-            width: 10px;
-            height: 10px;
+            width: 13px;
+            height: 13px;
             border: 1px solid #565f89;
             border-radius: 2px;
             flex-shrink: 0;
@@ -411,7 +398,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             border: none;
             color: #c0caf5;
             font-family: monospace;
-            font-size: 0.85em;
+            font-size: 1.1em;
             padding: 0;
         }
         .todo-input:focus {
@@ -431,14 +418,12 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         </div>
         <div class="stats-row">
             <span class="total-time">${this.formatDuration(summary.totalTimeMs)}</span>
-            <span class="session-count">${filteredSessions.length} session${filteredSessions.length !== 1 ? 's' : ''}</span>
+            <span class="session-count">(${filteredSessions.length} session${filteredSessions.length !== 1 ? 's' : ''})</span>
         </div>
     </div>
     <h2 class="section-header">sessions</h2>
-    <div class="sessions-list">
-        ${sessionsHtml}
-    </div>
-    <h2 class="section-header">todos</h2>
+    ${timelineHtml}
+    <h2 class="section-header" style="margin-top: 20px;">todos</h2>
     <div class="todos-list">
         ${todosHtml}
         ${isToday ? `
