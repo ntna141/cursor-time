@@ -473,7 +473,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     </div>
     <h2 class="section-header">sessions</h2>
     ${timelineHtml}
-    <h2 class="section-header" style="margin-top: 20px;">todos</h2>
+    <h2 class="section-header" style="margin-top: 20px;">${isToday ? 'todos' : 'completed'}</h2>
     <div class="todos-list">
         ${todosHtml}
         ${isToday ? `
