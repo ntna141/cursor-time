@@ -4,6 +4,7 @@ import { createDirectory, createDatabase } from './storage';
 import { setupFileWatcher } from './watchers/fileWatcher';
 import { setupCursorWatcher } from './watchers/cursorWatcher';
 import { HeartbeatAggregator } from './aggregators/heartbeatAggregator';
+import { SessionsPanelProvider } from './panels/sessionsPanel';
 
 let dbInstance: sqlite3.Database | null = null;
 let aggregator: HeartbeatAggregator | null = null;
@@ -34,6 +35,25 @@ export async function activate(context: vscode.ExtensionContext) {
                 aggregator.dispose();
             }
         }
+    });
+
+    const sessionsPanelProvider = new SessionsPanelProvider(dbInstance);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(
+            SessionsPanelProvider.viewType,
+            sessionsPanelProvider,
+            {
+                webviewOptions: {
+                    retainContextWhenHidden: true
+                }
+            }
+        )
+    );
+    
+    sessionsPanelProvider.preload();
+    
+    aggregator.onHeartbeat(() => {
+        sessionsPanelProvider.invalidateToday();
     });
     
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);

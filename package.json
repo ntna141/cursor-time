@@ -13,7 +13,26 @@
     "onStartupFinished"
   ],
   "main": "./out/extension.js",
-  "contributes": {},
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ntna-time",
+          "title": "ntna-time",
+          "icon": "$(clock)"
+        }
+      ]
+    },
+    "views": {
+      "ntna-time": [
+        {
+          "type": "webview",
+          "id": "ntna-time.sessionsView",
+          "name": "Sessions"
+        }
+      ]
+    }
+  },
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "node esbuild.config.js --production",

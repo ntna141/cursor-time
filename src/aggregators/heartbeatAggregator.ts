@@ -12,10 +12,15 @@ export class HeartbeatAggregator {
     private timer: NodeJS.Timeout | null = null;
     private db: sqlite3.Database;
     private outputChannel: vscode.OutputChannel;
+    private heartbeatCallbacks: (() => void)[] = [];
 
     constructor(db: sqlite3.Database, outputChannel: vscode.OutputChannel) {
         this.db = db;
         this.outputChannel = outputChannel;
+    }
+
+    onHeartbeat(callback: () => void) {
+        this.heartbeatCallbacks.push(callback);
     }
 
     start() {
@@ -64,6 +69,8 @@ export class HeartbeatAggregator {
         };
 
         insertHeartbeat(this.db, heartbeat);
+        
+        this.heartbeatCallbacks.forEach(cb => cb());
 
         const time = new Date(heartbeat.timestamp).toLocaleTimeString();
         const displayName = heartbeat.type === 'agent' ? 'agent chat' : path.basename(heartbeat.entity);
