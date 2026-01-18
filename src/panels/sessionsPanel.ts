@@ -206,6 +206,36 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             }
         });
 
+        const sortedHours = Array.from(sessionHours).sort((a, b) => a - b);
+        const hoursToShow = new Set<number>();
+        
+        if (sortedHours.length > 0) {
+            let groupStart = sortedHours[0];
+            let groupEnd = sortedHours[0];
+            
+            for (let i = 1; i < sortedHours.length; i++) {
+                if (sortedHours[i] === groupEnd + 1) {
+                    groupEnd = sortedHours[i];
+                } else {
+                    if (groupStart === groupEnd) {
+                        hoursToShow.add(groupStart);
+                    } else {
+                        hoursToShow.add(groupStart);
+                        hoursToShow.add(groupEnd);
+                    }
+                    groupStart = sortedHours[i];
+                    groupEnd = sortedHours[i];
+                }
+            }
+            
+            if (groupStart === groupEnd) {
+                hoursToShow.add(groupStart);
+            } else {
+                hoursToShow.add(groupStart);
+                hoursToShow.add(groupEnd);
+            }
+        }
+
         const bars = filteredSessions.map((session, index) => {
             const sessionStartPercent = ((session.start - dayStartMs) / msPerDay) * 100;
             const sessionEndPercent = ((session.end - dayStartMs) / msPerDay) * 100;
@@ -240,7 +270,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
 
         const hourMarkers = Array.from({ length: 24 }, (_, hour) => {
             const hourPercent = (hour / 24) * 100;
-            const showLabel = sessionHours.has(hour);
+            const showLabel = hoursToShow.has(hour);
             return `<div class="hour-marker" style="left: ${hourPercent}%">${showLabel ? `<span class="hour-label">${hour}</span>` : ''}</div>`;
         }).join('');
 
@@ -333,7 +363,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         .activity-breakdown {
             display: flex;
             gap: 12px;
-            margin-top: 18px;
+            margin-top: 35px;
             font-size: 12px;
         }
         .activity-item {
@@ -385,7 +415,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         }
         .hour-marker {
             position: absolute;
-            top: 0;
+            top: 14px;
             width: 1px;
             height: 6px;
             background: #414868;
@@ -452,17 +482,17 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         .drag-handle {
             cursor: grab;
             color: #565f89;
-            font-size: 10px;
+            font-size: 14px;
+            font-weight: bold;
             letter-spacing: -2px;
             padding: 0 2px;
             user-select: none;
             flex-shrink: 0;
             margin-top: 2px;
-            opacity: 0;
-            transition: opacity 0.15s ease;
+            visibility: hidden;
         }
         .todo-item:hover .drag-handle {
-            opacity: 1;
+            visibility: visible;
         }
         .drag-handle:hover {
             color: #7aa2f7;
@@ -565,19 +595,19 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             <span class="total-time">${formatDuration(summary.totalTimeMs)}</span>
             <span class="session-count">(${filteredSessions.length} session${filteredSessions.length !== 1 ? 's' : ''})</span>
         </div>
-        <div class="activity-breakdown">
-            <div class="activity-item">
-                <span class="activity-dot coding"></span>
-                <span class="activity-label">coding</span>
-            </div>
-            <div class="activity-item">
-                <span class="activity-dot planning"></span>
-                <span class="activity-label">planning</span>
-            </div>
-        </div>
     </div>
     <h2 class="section-header">sessions</h2>
     ${timelineHtml}
+    <div class="activity-breakdown">
+        <div class="activity-item">
+            <span class="activity-dot coding"></span>
+            <span class="activity-label">coding</span>
+        </div>
+        <div class="activity-item">
+            <span class="activity-dot planning"></span>
+            <span class="activity-label">planning</span>
+        </div>
+    </div>
     <h2 class="section-header" style="margin-top: 20px;">${isToday ? 'todos' : 'completed'}</h2>
     <div class="todos-list">
         ${todosHtml}
