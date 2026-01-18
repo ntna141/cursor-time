@@ -1,18 +1,22 @@
 import sqlite3 from 'sqlite3';
-import { TodoItem, insertTodo, updateTodoCompleted, deleteTodo, getTodosByDate, getUnfinishedTodosBeforeDate, getCompletedTodosByDate, getTodayDateKey } from '../storage';
+import { TodoItem, insertTodo, updateTodoCompleted, updateTodoText, deleteTodo, updateTodoSortOrder, getTodosByDate, getUnfinishedTodosBeforeDate, getCompletedTodosByDate, getTodayDateKey } from '../storage';
 
 export interface TodoMessage {
     command: string;
     text?: string;
     id?: string;
     completed?: boolean;
+    fromIndex?: number;
+    toIndex?: number;
 }
 
 interface PendingChange {
-    type: 'insert' | 'update' | 'delete';
+    type: 'insert' | 'update' | 'delete' | 'edit' | 'reorder';
     todo?: TodoItem;
     id?: string;
     completed?: boolean;
+    text?: string;
+    sortOrder?: number;
 }
 
 export class TodoHandler {
@@ -50,16 +54,31 @@ export class TodoHandler {
         const todos = await this.getTodos(dateKey);
 
         if (message.command === 'addTodo') {
+            const maxSortOrder = todos.length > 0 ? Math.max(...todos.map(t => t.sortOrder)) : -1;
             const todo: TodoItem = {
                 id: this.generateId(),
                 dateKey: dateKey,
                 text: message.text!,
                 completed: false,
-                createdAt: Date.now()
+                createdAt: Date.now(),
+                sortOrder: maxSortOrder + 1
             };
             todos.push(todo);
             this.pendingChanges.set(todo.id, { type: 'insert', todo });
             this.schedulePersist();
+            return true;
+        } else if (message.command === 'reorderTodo') {
+            const fromIndex = message.fromIndex!;
+            const toIndex = message.toIndex!;
+            if (fromIndex !== toIndex && fromIndex >= 0 && toIndex >= 0 && fromIndex < todos.length && toIndex < todos.length) {
+                const [moved] = todos.splice(fromIndex, 1);
+                todos.splice(toIndex, 0, moved);
+                todos.forEach((todo, index) => {
+                    todo.sortOrder = index;
+                    this.pendingChanges.set(`reorder-${todo.id}`, { type: 'reorder', id: todo.id, sortOrder: index });
+                });
+                this.schedulePersist();
+            }
             return true;
         } else if (message.command === 'toggleTodo') {
             const todo = todos.find(t => t.id === message.id);
@@ -75,6 +94,23 @@ export class TodoHandler {
                 todos.splice(index, 1);
                 this.pendingChanges.set(message.id!, { type: 'delete', id: message.id });
                 this.schedulePersist();
+            }
+            return true;
+        } else if (message.command === 'editTodo') {
+            const todo = todos.find(t => t.id === message.id);
+            if (todo && message.text !== undefined) {
+                if (message.text.trim() === '') {
+                    const index = todos.findIndex(t => t.id === message.id);
+                    if (index !== -1) {
+                        todos.splice(index, 1);
+                        this.pendingChanges.set(message.id!, { type: 'delete', id: message.id });
+                        this.schedulePersist();
+                    }
+                } else {
+                    todo.text = message.text;
+                    this.pendingChanges.set(todo.id, { type: 'edit', id: todo.id, text: message.text });
+                    this.schedulePersist();
+                }
             }
             return true;
         }
@@ -105,8 +141,12 @@ export class TodoHandler {
                 await insertTodo(this.db, change.todo);
             } else if (change.type === 'update' && change.id) {
                 await updateTodoCompleted(this.db, change.id, change.completed!);
+            } else if (change.type === 'edit' && change.id && change.text !== undefined) {
+                await updateTodoText(this.db, change.id, change.text);
             } else if (change.type === 'delete' && change.id) {
                 await deleteTodo(this.db, change.id);
+            } else if (change.type === 'reorder' && change.id && change.sortOrder !== undefined) {
+                await updateTodoSortOrder(this.db, change.id, change.sortOrder);
             }
         }
     }

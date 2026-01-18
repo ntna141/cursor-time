@@ -57,6 +57,7 @@ export interface TodoItem {
     text: string;
     completed: boolean;
     createdAt: number;
+    sortOrder: number;
 }
 
 export function createDirectory(dir: string) {
@@ -121,7 +122,8 @@ export function createDatabase(dir: string): Promise<sqlite3.Database> {
                             date_key TEXT NOT NULL,
                             text TEXT NOT NULL,
                             completed INTEGER DEFAULT 0,
-                            created_at INTEGER NOT NULL
+                            created_at INTEGER NOT NULL,
+                            sort_order INTEGER DEFAULT 0
                         )
                     `, (err) => {
                         if (err) {
@@ -132,6 +134,7 @@ export function createDatabase(dir: string): Promise<sqlite3.Database> {
                         resolve(db);
 
                         db.run(`CREATE INDEX IF NOT EXISTS idx_todos_date ON todos(date_key)`);
+                        db.run(`ALTER TABLE todos ADD COLUMN sort_order INTEGER DEFAULT 0`, () => {});
                         db.run(`ALTER TABLE heartbeats ADD COLUMN activity_type TEXT DEFAULT 'coding'`, () => {});
                         db.run(`ALTER TABLE heartbeats ADD COLUMN has_file_activity INTEGER DEFAULT 1`, () => {});
                         db.run(`ALTER TABLE heartbeats ADD COLUMN has_agent_activity INTEGER DEFAULT 0`, () => {});
@@ -480,20 +483,17 @@ export function getDaySessions(
 
                 if (cacheRow && !isToday) {
                     const sessions = JSON.parse(cacheRow.sessions_json);
-                    const hasSegments = sessions.length === 0 || (sessions[0].activitySegments !== undefined);
-                    if (hasSegments) {
-                        const totalCodingMs = sessions.reduce((sum: number, s: Session) => sum + (s.codingMs || 0), 0);
-                        const totalPlanningMs = sessions.reduce((sum: number, s: Session) => sum + (s.planningMs || 0), 0);
-                        resolve({
-                            dateKey: cacheRow.date_key,
-                            sessionCount: cacheRow.session_count,
-                            totalTimeMs: cacheRow.total_time_ms,
-                            sessions,
-                            totalCodingMs,
-                            totalPlanningMs
-                        });
-                        return;
-                    }
+                    const totalCodingMs = sessions.reduce((sum: number, s: Session) => sum + (s.codingMs || 0), 0);
+                    const totalPlanningMs = sessions.reduce((sum: number, s: Session) => sum + (s.planningMs || 0), 0);
+                    resolve({
+                        dateKey: cacheRow.date_key,
+                        sessionCount: cacheRow.session_count,
+                        totalTimeMs: cacheRow.total_time_ms,
+                        sessions,
+                        totalCodingMs,
+                        totalPlanningMs
+                    });
+                    return;
                 }
 
                 const { start, end } = getDateRange(dateKey);
@@ -550,7 +550,7 @@ export function getTodosByDate(
 ): Promise<TodoItem[]> {
     return new Promise((resolve, reject) => {
         db.all(
-            `SELECT * FROM todos WHERE date_key = ? ORDER BY created_at ASC`,
+            `SELECT * FROM todos WHERE date_key = ? ORDER BY sort_order ASC, created_at ASC`,
             [dateKey],
             (err, rows: any[]) => {
                 if (err) {
@@ -561,7 +561,8 @@ export function getTodosByDate(
                         dateKey: row.date_key,
                         text: row.text,
                         completed: row.completed === 1,
-                        createdAt: row.created_at
+                        createdAt: row.created_at,
+                        sortOrder: row.sort_order || 0
                     })));
                 }
             }
@@ -575,7 +576,7 @@ export function getUnfinishedTodosBeforeDate(
 ): Promise<TodoItem[]> {
     return new Promise((resolve, reject) => {
         db.all(
-            `SELECT * FROM todos WHERE date_key < ? AND completed = 0 ORDER BY date_key ASC, created_at ASC`,
+            `SELECT * FROM todos WHERE date_key < ? AND completed = 0 ORDER BY date_key ASC, sort_order ASC, created_at ASC`,
             [dateKey],
             (err, rows: any[]) => {
                 if (err) {
@@ -586,7 +587,8 @@ export function getUnfinishedTodosBeforeDate(
                         dateKey: row.date_key,
                         text: row.text,
                         completed: row.completed === 1,
-                        createdAt: row.created_at
+                        createdAt: row.created_at,
+                        sortOrder: row.sort_order || 0
                     })));
                 }
             }
@@ -600,7 +602,7 @@ export function getCompletedTodosByDate(
 ): Promise<TodoItem[]> {
     return new Promise((resolve, reject) => {
         db.all(
-            `SELECT * FROM todos WHERE date_key = ? AND completed = 1 ORDER BY created_at ASC`,
+            `SELECT * FROM todos WHERE date_key = ? AND completed = 1 ORDER BY sort_order ASC, created_at ASC`,
             [dateKey],
             (err, rows: any[]) => {
                 if (err) {
@@ -611,7 +613,8 @@ export function getCompletedTodosByDate(
                         dateKey: row.date_key,
                         text: row.text,
                         completed: row.completed === 1,
-                        createdAt: row.created_at
+                        createdAt: row.created_at,
+                        sortOrder: row.sort_order || 0
                     })));
                 }
             }
@@ -622,8 +625,8 @@ export function getCompletedTodosByDate(
 export function insertTodo(db: sqlite3.Database, todo: TodoItem): Promise<void> {
     return new Promise((resolve, reject) => {
         db.run(
-            `INSERT INTO todos (id, date_key, text, completed, created_at) VALUES (?, ?, ?, ?, ?)`,
-            [todo.id, todo.dateKey, todo.text, todo.completed ? 1 : 0, todo.createdAt],
+            `INSERT INTO todos (id, date_key, text, completed, created_at, sort_order) VALUES (?, ?, ?, ?, ?, ?)`,
+            [todo.id, todo.dateKey, todo.text, todo.completed ? 1 : 0, todo.createdAt, todo.sortOrder],
             (err) => err ? reject(err) : resolve()
         );
     });
@@ -639,9 +642,29 @@ export function updateTodoCompleted(db: sqlite3.Database, id: string, completed:
     });
 }
 
+export function updateTodoText(db: sqlite3.Database, id: string, text: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+        db.run(
+            `UPDATE todos SET text = ? WHERE id = ?`,
+            [text, id],
+            (err) => err ? reject(err) : resolve()
+        );
+    });
+}
+
 export function deleteTodo(db: sqlite3.Database, id: string): Promise<void> {
     return new Promise((resolve, reject) => {
         db.run(`DELETE FROM todos WHERE id = ?`, [id], (err) => err ? reject(err) : resolve());
+    });
+}
+
+export function updateTodoSortOrder(db: sqlite3.Database, id: string, sortOrder: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+        db.run(
+            `UPDATE todos SET sort_order = ? WHERE id = ?`,
+            [sortOrder, id],
+            (err) => err ? reject(err) : resolve()
+        );
     });
 }
 

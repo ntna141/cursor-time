@@ -260,11 +260,11 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         const filteredSessions = summary.sessions.filter(s => s.durationMs >= 60000);
         const timelineHtml = this.getTimelineHtml(summary.sessions);
 
-        const todosHtml = todos.map(todo => `
-            <div class="todo-item ${todo.completed ? 'completed' : ''}">
+        const todosHtml = todos.map((todo, index) => `
+            <div class="todo-item ${todo.completed ? 'completed' : ''}" ${isToday ? `data-index="${index}"` : ''}>
                 ${isToday ? `<input type="checkbox" class="todo-checkbox" data-id="${todo.id}" ${todo.completed ? 'checked' : ''}>` : `<span class="todo-bullet">${todo.completed ? '×' : '•'}</span>`}
-                <span class="todo-text">${this.escapeHtml(todo.text)}</span>
-                ${isToday ? `<button class="todo-delete" data-id="${todo.id}">&times;</button>` : ''}
+                ${isToday ? `<span class="todo-text" data-id="${todo.id}" contenteditable="true">${this.escapeHtml(todo.text)}</span>` : `<span class="todo-text">${this.escapeHtml(todo.text)}</span>`}
+                ${isToday ? `<span class="drag-handle" data-index="${index}">⋮⋮</span>` : ''}
             </div>
         `).join('');
 
@@ -433,6 +433,42 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             align-items: flex-start;
             gap: 8px;
             padding: 4px 0;
+            transition: background-color 0.15s ease, opacity 0.15s ease;
+        }
+        .todo-item.dragging {
+            opacity: 0.5;
+            background: #24283b;
+        }
+        .todo-item.drag-over-top {
+            background: #24283b;
+            border-top: 2px solid #7aa2f7;
+            margin-top: -2px;
+        }
+        .todo-item.drag-over-bottom {
+            background: #24283b;
+            border-bottom: 2px solid #7aa2f7;
+            margin-bottom: -2px;
+        }
+        .drag-handle {
+            cursor: grab;
+            color: #565f89;
+            font-size: 10px;
+            letter-spacing: -2px;
+            padding: 0 2px;
+            user-select: none;
+            flex-shrink: 0;
+            margin-top: 2px;
+            opacity: 0;
+            transition: opacity 0.15s ease;
+        }
+        .todo-item:hover .drag-handle {
+            opacity: 1;
+        }
+        .drag-handle:hover {
+            color: #7aa2f7;
+        }
+        .drag-handle:active {
+            cursor: grabbing;
         }
         .todo-item.completed .todo-text {
             text-decoration: line-through;
@@ -481,22 +517,12 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             overflow-wrap: break-word;
             line-height: 1.4;
         }
-        .todo-delete {
-            background: transparent;
-            border: none;
-            color: #f7768e;
-            cursor: pointer;
-            font-size: 1.17em;
-            padding: 0 3px;
-            opacity: 0;
-            flex-shrink: 0;
-            margin-top: 2px;
-        }
-        .todo-item:hover .todo-delete {
-            opacity: 0.6;
-        }
-        .todo-delete:hover {
-            opacity: 1;
+        .todo-text[contenteditable="true"]:focus {
+            outline: none;
+            background: #24283b;
+            border-radius: 2px;
+            padding: 0 4px;
+            margin: 0 -4px;
         }
         .todo-input-row {
             display: flex;
@@ -574,15 +600,19 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         const todoInput = document.getElementById('todoInput');
         if (todoInput) {
             ${shouldFocusTodoInput ? 'todoInput.focus();' : ''}
+            const submitTodo = () => {
+                const text = todoInput.value.trim();
+                if (text) {
+                    vscode.postMessage({ command: 'addTodo', text });
+                    todoInput.value = '';
+                }
+            };
             todoInput.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') {
-                    const text = todoInput.value.trim();
-                    if (text) {
-                        vscode.postMessage({ command: 'addTodo', text });
-                        todoInput.value = '';
-                    }
+                    submitTodo();
                 }
             });
+            todoInput.addEventListener('blur', submitTodo);
         }
         
         window.addEventListener('message', (event) => {
@@ -602,10 +632,98 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             });
         });
         
-        document.querySelectorAll('.todo-delete').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const id = e.target.dataset.id;
-                vscode.postMessage({ command: 'deleteTodo', id });
+        document.querySelectorAll('.todo-text[contenteditable="true"]').forEach(span => {
+            let originalText = span.textContent;
+            
+            span.addEventListener('focus', () => {
+                originalText = span.textContent;
+            });
+            
+            span.addEventListener('blur', () => {
+                const newText = span.textContent.trim();
+                if (newText !== originalText) {
+                    const id = span.dataset.id;
+                    vscode.postMessage({ command: 'editTodo', id, text: newText });
+                }
+            });
+            
+            span.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    span.blur();
+                } else if (e.key === 'Escape') {
+                    span.textContent = originalText;
+                    span.blur();
+                }
+            });
+        });
+        
+        let draggedItem = null;
+        let draggedIndex = -1;
+        
+        document.querySelectorAll('.drag-handle').forEach(handle => {
+            handle.addEventListener('mousedown', (e) => {
+                const item = handle.closest('.todo-item');
+                if (item) {
+                    item.setAttribute('draggable', 'true');
+                }
+            });
+        });
+        
+        document.addEventListener('mouseup', () => {
+            document.querySelectorAll('.todo-item[draggable="true"]').forEach(item => {
+                item.removeAttribute('draggable');
+            });
+        });
+        
+        document.querySelectorAll('.todo-item[data-index]').forEach(item => {
+            item.addEventListener('dragstart', (e) => {
+                draggedItem = item;
+                draggedIndex = parseInt(item.dataset.index);
+                item.classList.add('dragging');
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', draggedIndex);
+            });
+            
+            item.addEventListener('dragend', () => {
+                item.classList.remove('dragging');
+                item.removeAttribute('draggable');
+                document.querySelectorAll('.todo-item').forEach(i => {
+                    i.classList.remove('drag-over-top', 'drag-over-bottom');
+                });
+                draggedItem = null;
+                draggedIndex = -1;
+            });
+            
+            item.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                if (draggedItem && item !== draggedItem) {
+                    document.querySelectorAll('.todo-item').forEach(i => {
+                        i.classList.remove('drag-over-top', 'drag-over-bottom');
+                    });
+                    const targetIndex = parseInt(item.dataset.index);
+                    if (targetIndex > draggedIndex) {
+                        item.classList.add('drag-over-bottom');
+                    } else {
+                        item.classList.add('drag-over-top');
+                    }
+                }
+            });
+            
+            item.addEventListener('dragleave', () => {
+                item.classList.remove('drag-over-top', 'drag-over-bottom');
+            });
+            
+            item.addEventListener('drop', (e) => {
+                e.preventDefault();
+                item.classList.remove('drag-over-top', 'drag-over-bottom');
+                if (draggedItem && item !== draggedItem) {
+                    const toIndex = parseInt(item.dataset.index);
+                    if (draggedIndex !== toIndex) {
+                        vscode.postMessage({ command: 'reorderTodo', fromIndex: draggedIndex, toIndex: toIndex });
+                    }
+                }
             });
         });
     </script>
