@@ -415,7 +415,7 @@ export function getDateRange(dateKey: string): { start: number; end: number } {
 }
 
 const SESSION_GAP_THRESHOLD_MS = 20 * 60 * 1000;
-const HEARTBEAT_INTERVAL_MS = 3000;
+const PLANNING_STREAK_THRESHOLD = 5;
 
 function computeSessionsFromHeartbeats(rows: any[]): Session[] {
     if (rows.length === 0) return [];
@@ -428,61 +428,91 @@ function computeSessionsFromHeartbeats(rows: any[]): Session[] {
         end: number; 
         heartbeats: number; 
         projects: Set<string>;
-        codingCount: number;
-        planningCount: number;
+        codingMs: number;
+        planningMs: number;
+        lastTimestamp: number;
+        currentActivityStart: number;
+        planningStreak: number;
     } = {
         start: rows[0].timestamp,
         end: rows[0].timestamp,
         heartbeats: 1,
         projects: new Set(rows[0].project ? [rows[0].project] : []),
-        codingCount: isPlanning(rows[0].activity_type) ? 0 : 1,
-        planningCount: isPlanning(rows[0].activity_type) ? 1 : 0
+        codingMs: 0,
+        planningMs: 0,
+        lastTimestamp: rows[0].timestamp,
+        currentActivityStart: rows[0].timestamp,
+        planningStreak: isPlanning(rows[0].activity_type) ? 1 : 0
+    };
+
+    const flushCurrentActivity = (session: typeof currentSession, toTimestamp: number, isPlanningActivity: boolean) => {
+        if (toTimestamp > session.currentActivityStart) {
+            const duration = toTimestamp - session.currentActivityStart;
+            if (isPlanningActivity && session.planningStreak >= PLANNING_STREAK_THRESHOLD) {
+                session.planningMs += duration;
+            } else {
+                session.codingMs += duration;
+            }
+        }
     };
 
     for (let i = 1; i < rows.length; i++) {
         const row = rows[i];
         const gap = row.timestamp - currentSession.end;
+        const currentIsPlanning = isPlanning(row.activity_type);
+        const lastWasPlanning = currentSession.planningStreak > 0;
 
         if (gap > SESSION_GAP_THRESHOLD_MS) {
+            flushCurrentActivity(currentSession, currentSession.end, lastWasPlanning);
             sessions.push({
                 start: currentSession.start,
                 end: currentSession.end,
                 durationMs: currentSession.end - currentSession.start,
                 heartbeats: currentSession.heartbeats,
                 projects: Array.from(currentSession.projects),
-                codingMs: currentSession.codingCount * HEARTBEAT_INTERVAL_MS,
-                planningMs: currentSession.planningCount * HEARTBEAT_INTERVAL_MS
+                codingMs: currentSession.codingMs,
+                planningMs: currentSession.planningMs
             });
             currentSession = {
                 start: row.timestamp,
                 end: row.timestamp,
                 heartbeats: 1,
                 projects: new Set(row.project ? [row.project] : []),
-                codingCount: isPlanning(row.activity_type) ? 0 : 1,
-                planningCount: isPlanning(row.activity_type) ? 1 : 0
+                codingMs: 0,
+                planningMs: 0,
+                lastTimestamp: row.timestamp,
+                currentActivityStart: row.timestamp,
+                planningStreak: currentIsPlanning ? 1 : 0
             };
         } else {
+            if (currentIsPlanning !== lastWasPlanning) {
+                flushCurrentActivity(currentSession, row.timestamp, lastWasPlanning);
+                currentSession.currentActivityStart = row.timestamp;
+                currentSession.planningStreak = currentIsPlanning ? 1 : 0;
+            } else {
+                if (currentIsPlanning) {
+                    currentSession.planningStreak++;
+                }
+            }
+
             currentSession.end = row.timestamp;
+            currentSession.lastTimestamp = row.timestamp;
             currentSession.heartbeats++;
             if (row.project) {
                 currentSession.projects.add(row.project);
             }
-            if (isPlanning(row.activity_type)) {
-                currentSession.planningCount++;
-            } else {
-                currentSession.codingCount++;
-            }
         }
     }
 
+    flushCurrentActivity(currentSession, currentSession.end, currentSession.planningStreak > 0);
     sessions.push({
         start: currentSession.start,
         end: currentSession.end,
         durationMs: currentSession.end - currentSession.start,
         heartbeats: currentSession.heartbeats,
         projects: Array.from(currentSession.projects),
-        codingMs: currentSession.codingCount * HEARTBEAT_INTERVAL_MS,
-        planningMs: currentSession.planningCount * HEARTBEAT_INTERVAL_MS
+        codingMs: currentSession.codingMs,
+        planningMs: currentSession.planningMs
     });
 
     return sessions;
@@ -623,46 +653,3 @@ export function deleteTodo(db: sqlite3.Database, id: string): Promise<void> {
     });
 }
 
-export interface ActivityBreakdown {
-    coding: number;
-    planning: number;
-    total: number;
-}
-
-export function getTodayActivityBreakdown(
-    db: sqlite3.Database,
-    heartbeatIntervalMs: number = 3000
-): Promise<ActivityBreakdown> {
-    return new Promise((resolve, reject) => {
-        const { start, end } = getDateRange(getTodayDateKey());
-        
-        db.all(
-            `SELECT activity_type, COUNT(*) as count FROM heartbeats WHERE timestamp BETWEEN ? AND ? GROUP BY activity_type`,
-            [start, end],
-            (err, rows: any[]) => {
-                if (err) {
-                    reject(err);
-                    return;
-                }
-
-                let coding = 0;
-                let planning = 0;
-
-                for (const row of rows) {
-                    const timeMs = row.count * heartbeatIntervalMs;
-                    if (row.activity_type === 'planning') {
-                        planning = timeMs;
-                    } else {
-                        coding += timeMs;
-                    }
-                }
-
-                resolve({
-                    coding,
-                    planning,
-                    total: coding + planning
-                });
-            }
-        );
-    });
-}

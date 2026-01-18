@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import sqlite3 from 'sqlite3';
 import * as path from 'path';
-import { createDirectory, createDatabase, getTodayActivityBreakdown, getRecentHeartbeats } from './storage';
+import { createDirectory, createDatabase, getDaySessions, getRecentHeartbeats, getTodayDateKey } from './storage';
 import { setupFileWatcher } from './watchers/fileWatcher';
 import { setupCursorWatcher } from './watchers/cursorWatcher';
 import { HeartbeatAggregator } from './aggregators/heartbeatAggregator';
@@ -72,19 +72,19 @@ export async function activate(context: vscode.ExtensionContext) {
 
     async function updateStatusBar() {
         try {
-            const breakdown = await getTodayActivityBreakdown(dbInstance!);
+            const summary = await getDaySessions(dbInstance!, getTodayDateKey());
             const parts: string[] = [];
             
-            if (breakdown.coding > 0) {
-                parts.push(`${formatDuration(breakdown.coding)} coding`);
+            if (summary.totalCodingMs > 0) {
+                parts.push(`${formatDuration(summary.totalCodingMs)} coding`);
             }
-            if (breakdown.planning > 0) {
-                parts.push(`${formatDuration(breakdown.planning)} planning`);
+            if (summary.totalPlanningMs > 0) {
+                parts.push(`${formatDuration(summary.totalPlanningMs)} planning`);
             }
             
             if (parts.length > 0) {
                 statusBarItem.text = `$(clock) ${parts.join(' | ')}`;
-                statusBarItem.tooltip = `Today: ${formatDuration(breakdown.total)} total\nCoding: ${formatDuration(breakdown.coding)}\nPlanning: ${formatDuration(breakdown.planning)}`;
+                statusBarItem.tooltip = `Today: ${formatDuration(summary.totalTimeMs)} total\nCoding: ${formatDuration(summary.totalCodingMs)}\nPlanning: ${formatDuration(summary.totalPlanningMs)}`;
             } else {
                 statusBarItem.text = "$(clock) 0m";
                 statusBarItem.tooltip = "No activity tracked today";
