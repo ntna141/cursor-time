@@ -1,5 +1,5 @@
 import sqlite3 from 'sqlite3';
-import { Heartbeat, Session, DaySessionSummary, getTodayDateKey, getDateRange } from './index';
+import { Heartbeat, Session, DaySessionSummary, getTodayDateKey, getDateRange, ActivitySegment } from './index';
 import { SESSION_GAP_THRESHOLD_MS, PLANNING_STREAK_THRESHOLD } from '../utils/time';
 
 interface ActiveSession {
@@ -11,6 +11,7 @@ interface ActiveSession {
     heartbeats: number;
     currentActivityStart: number;
     planningStreak: number;
+    activitySegments: ActivitySegment[];
 }
 
 interface TodayState {
@@ -106,7 +107,8 @@ export class TodaySessionStore {
                 planningMs: 0,
                 heartbeats: 1,
                 currentActivityStart: timestamp,
-                planningStreak: isPlanning ? 1 : 0
+                planningStreak: isPlanning ? 1 : 0,
+                activitySegments: []
             };
         } else {
             const session = this.state.activeSession;
@@ -133,11 +135,17 @@ export class TodaySessionStore {
     private flushActivityTime(session: ActiveSession, toTimestamp: number, isPlanningActivity: boolean): void {
         if (toTimestamp > session.currentActivityStart) {
             const duration = toTimestamp - session.currentActivityStart;
-            if (isPlanningActivity && session.planningStreak >= PLANNING_STREAK_THRESHOLD) {
+            const isTruePlanning = isPlanningActivity && session.planningStreak >= PLANNING_STREAK_THRESHOLD;
+            if (isTruePlanning) {
                 session.planningMs += duration;
             } else {
                 session.codingMs += duration;
             }
+            session.activitySegments.push({
+                start: session.currentActivityStart,
+                end: toTimestamp,
+                type: isTruePlanning ? 'planning' : 'coding'
+            });
         }
     }
 
@@ -155,7 +163,8 @@ export class TodaySessionStore {
             heartbeats: session.heartbeats,
             projects: Array.from(session.projects),
             codingMs: session.codingMs,
-            planningMs: session.planningMs
+            planningMs: session.planningMs,
+            activitySegments: session.activitySegments
         });
 
         this.state.activeSession = null;
@@ -187,14 +196,21 @@ export class TodaySessionStore {
             
             let codingMs = session.codingMs;
             let planningMs = session.planningMs;
+            const activitySegments = [...session.activitySegments];
             
             if (session.end > session.currentActivityStart) {
                 const duration = session.end - session.currentActivityStart;
-                if (lastWasPlanning && session.planningStreak >= PLANNING_STREAK_THRESHOLD) {
+                const isTruePlanning = lastWasPlanning && session.planningStreak >= PLANNING_STREAK_THRESHOLD;
+                if (isTruePlanning) {
                     planningMs += duration;
                 } else {
                     codingMs += duration;
                 }
+                activitySegments.push({
+                    start: session.currentActivityStart,
+                    end: session.end,
+                    type: isTruePlanning ? 'planning' : 'coding'
+                });
             }
 
             allSessions.push({
@@ -204,7 +220,8 @@ export class TodaySessionStore {
                 heartbeats: session.heartbeats,
                 projects: Array.from(session.projects),
                 codingMs,
-                planningMs
+                planningMs,
+                activitySegments
             });
         }
 

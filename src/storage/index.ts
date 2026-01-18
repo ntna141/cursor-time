@@ -25,6 +25,12 @@ export interface Heartbeat {
     source_file?: string;
 }
 
+export interface ActivitySegment {
+    start: number;
+    end: number;
+    type: 'coding' | 'planning';
+}
+
 export interface Session {
     start: number;
     end: number;
@@ -33,6 +39,7 @@ export interface Session {
     projects: string[];
     codingMs: number;
     planningMs: number;
+    activitySegments: ActivitySegment[];
 }
 
 export interface DaySessionSummary {
@@ -359,6 +366,7 @@ function computeSessionsFromHeartbeats(rows: any[]): Session[] {
         lastTimestamp: number;
         currentActivityStart: number;
         planningStreak: number;
+        activitySegments: ActivitySegment[];
     } = {
         start: rows[0].timestamp,
         end: rows[0].timestamp,
@@ -368,17 +376,24 @@ function computeSessionsFromHeartbeats(rows: any[]): Session[] {
         planningMs: 0,
         lastTimestamp: rows[0].timestamp,
         currentActivityStart: rows[0].timestamp,
-        planningStreak: isPlanning(rows[0].activity_type) ? 1 : 0
+        planningStreak: isPlanning(rows[0].activity_type) ? 1 : 0,
+        activitySegments: []
     };
 
     const flushCurrentActivity = (session: typeof currentSession, toTimestamp: number, isPlanningActivity: boolean) => {
         if (toTimestamp > session.currentActivityStart) {
             const duration = toTimestamp - session.currentActivityStart;
-            if (isPlanningActivity && session.planningStreak >= PLANNING_STREAK_THRESHOLD) {
+            const isTruePlanning = isPlanningActivity && session.planningStreak >= PLANNING_STREAK_THRESHOLD;
+            if (isTruePlanning) {
                 session.planningMs += duration;
             } else {
                 session.codingMs += duration;
             }
+            session.activitySegments.push({
+                start: session.currentActivityStart,
+                end: toTimestamp,
+                type: isTruePlanning ? 'planning' : 'coding'
+            });
         }
     };
 
@@ -397,7 +412,8 @@ function computeSessionsFromHeartbeats(rows: any[]): Session[] {
                 heartbeats: currentSession.heartbeats,
                 projects: Array.from(currentSession.projects),
                 codingMs: currentSession.codingMs,
-                planningMs: currentSession.planningMs
+                planningMs: currentSession.planningMs,
+                activitySegments: currentSession.activitySegments
             });
             currentSession = {
                 start: row.timestamp,
@@ -408,7 +424,8 @@ function computeSessionsFromHeartbeats(rows: any[]): Session[] {
                 planningMs: 0,
                 lastTimestamp: row.timestamp,
                 currentActivityStart: row.timestamp,
-                planningStreak: currentIsPlanning ? 1 : 0
+                planningStreak: currentIsPlanning ? 1 : 0,
+                activitySegments: []
             };
         } else {
             if (currentIsPlanning !== lastWasPlanning) {
@@ -438,7 +455,8 @@ function computeSessionsFromHeartbeats(rows: any[]): Session[] {
         heartbeats: currentSession.heartbeats,
         projects: Array.from(currentSession.projects),
         codingMs: currentSession.codingMs,
-        planningMs: currentSession.planningMs
+        planningMs: currentSession.planningMs,
+        activitySegments: currentSession.activitySegments
     });
 
     return sessions;
@@ -462,17 +480,20 @@ export function getDaySessions(
 
                 if (cacheRow && !isToday) {
                     const sessions = JSON.parse(cacheRow.sessions_json);
-                    const totalCodingMs = sessions.reduce((sum: number, s: Session) => sum + (s.codingMs || 0), 0);
-                    const totalPlanningMs = sessions.reduce((sum: number, s: Session) => sum + (s.planningMs || 0), 0);
-                    resolve({
-                        dateKey: cacheRow.date_key,
-                        sessionCount: cacheRow.session_count,
-                        totalTimeMs: cacheRow.total_time_ms,
-                        sessions,
-                        totalCodingMs,
-                        totalPlanningMs
-                    });
-                    return;
+                    const hasSegments = sessions.length === 0 || (sessions[0].activitySegments !== undefined);
+                    if (hasSegments) {
+                        const totalCodingMs = sessions.reduce((sum: number, s: Session) => sum + (s.codingMs || 0), 0);
+                        const totalPlanningMs = sessions.reduce((sum: number, s: Session) => sum + (s.planningMs || 0), 0);
+                        resolve({
+                            dateKey: cacheRow.date_key,
+                            sessionCount: cacheRow.session_count,
+                            totalTimeMs: cacheRow.total_time_ms,
+                            sessions,
+                            totalCodingMs,
+                            totalPlanningMs
+                        });
+                        return;
+                    }
                 }
 
                 const { start, end } = getDateRange(dateKey);

@@ -176,7 +176,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     }
 
 
-    private getTimelineHtml(sessions: Array<{ start: number; end: number; durationMs: number; projects: string[]; codingMs: number; planningMs: number }>): string {
+    private getTimelineHtml(sessions: Array<{ start: number; end: number; durationMs: number; projects: string[]; codingMs: number; planningMs: number; activitySegments?: Array<{ start: number; end: number; type: 'coding' | 'planning' }> }>): string {
         const filteredSessions = sessions.filter(s => s.durationMs >= 60000);
         
         if (filteredSessions.length === 0) {
@@ -188,31 +188,60 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         dayStart.setHours(0, 0, 0, 0);
         const dayStartMs = dayStart.getTime();
         const msPerDay = 24 * 60 * 60 * 1000;
+        const msPerHour = 60 * 60 * 1000;
+
+        const sessionHours = new Set<number>();
+        filteredSessions.forEach(session => {
+            const startOffset = session.start - dayStartMs;
+            const endOffset = session.end - dayStartMs;
+            
+            const startHour = Math.floor(startOffset / msPerHour);
+            const endHour = Math.ceil(endOffset / msPerHour);
+            
+            if (startHour >= 0 && startHour < 24) {
+                sessionHours.add(startHour);
+            }
+            if (endHour >= 0 && endHour < 24) {
+                sessionHours.add(endHour);
+            }
+        });
 
         const bars = filteredSessions.map((session, index) => {
-            const startPercent = ((session.start - dayStartMs) / msPerDay) * 100;
-            const endPercent = ((session.end - dayStartMs) / msPerDay) * 100;
-            const widthPercent = endPercent - startPercent;
-            const centerPercent = startPercent + widthPercent / 2;
+            const sessionStartPercent = ((session.start - dayStartMs) / msPerDay) * 100;
+            const sessionEndPercent = ((session.end - dayStartMs) / msPerDay) * 100;
+            const sessionWidthPercent = sessionEndPercent - sessionStartPercent;
+            const centerPercent = sessionStartPercent + sessionWidthPercent / 2;
             
             const duration = formatDuration(session.durationMs);
             const position = index % 2 === 0 ? 'top' : 'bottom';
             
-            const totalActivity = (session.codingMs || 0) + (session.planningMs || 0);
-            const codingPercent = totalActivity > 0 ? ((session.codingMs || 0) / totalActivity) * 100 : 100;
+            let segmentBars = '';
+            if (session.activitySegments && session.activitySegments.length > 0) {
+                segmentBars = session.activitySegments.map(segment => {
+                    const segStartPercent = ((segment.start - dayStartMs) / msPerDay) * 100;
+                    const segEndPercent = ((segment.end - dayStartMs) / msPerDay) * 100;
+                    const segWidthPercent = segEndPercent - segStartPercent;
+                    return `<div class="timeline-bar ${segment.type}" style="position: absolute; left: ${segStartPercent}%; width: ${segWidthPercent}%; height: 100%;"></div>`;
+                }).join('');
+            } else {
+                const totalActivity = (session.codingMs || 0) + (session.planningMs || 0);
+                const codingPercent = totalActivity > 0 ? ((session.codingMs || 0) / totalActivity) * 100 : 100;
+                segmentBars = `
+                    <div class="timeline-bar coding" style="position: absolute; left: ${sessionStartPercent}%; width: ${sessionWidthPercent * codingPercent / 100}%; height: 100%;"></div>
+                    <div class="timeline-bar planning" style="position: absolute; left: ${sessionStartPercent + sessionWidthPercent * codingPercent / 100}%; width: ${sessionWidthPercent * (100 - codingPercent) / 100}%; height: 100%;"></div>
+                `;
+            }
             
             return `
-                <div class="timeline-bar-container" style="left: ${startPercent}%; width: ${widthPercent}%;">
-                    <div class="timeline-bar coding" style="width: ${codingPercent}%;"></div>
-                    <div class="timeline-bar planning" style="width: ${100 - codingPercent}%;"></div>
-                </div>
+                ${segmentBars}
                 <span class="time-label ${position}" style="left: ${centerPercent}%">${duration}</span>
             `;
         }).join('');
 
         const hourMarkers = Array.from({ length: 24 }, (_, hour) => {
             const hourPercent = (hour / 24) * 100;
-            return `<div class="hour-marker" style="left: ${hourPercent}%"><span class="hour-label">${hour}</span></div>`;
+            const showLabel = sessionHours.has(hour);
+            return `<div class="hour-marker" style="left: ${hourPercent}%">${showLabel ? `<span class="hour-label">${hour}</span>` : ''}</div>`;
         }).join('');
 
         return `
@@ -371,15 +400,11 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             color: #565f89;
             white-space: nowrap;
         }
-        .timeline-bar-container {
+        .timeline-bar {
             position: absolute;
             top: 0;
-            bottom: 0;
-            display: flex;
-            min-width: 2px;
-        }
-        .timeline-bar {
             height: 100%;
+            min-width: 2px;
         }
         .timeline-bar.coding {
             background: #9ece6a;
