@@ -21,6 +21,14 @@ export function setupCursorWatcher(
 
     const homeDir = process.env.HOME || process.env.USERPROFILE || '';
 
+    const plansPath = path.join(homeDir, '.cursor', 'plans');
+    if (fs.existsSync(plansPath)) {
+        outputChannel.appendLine(`[cursor-watcher] Watching plans folder: ${plansPath}`);
+        watchPlansFolder(plansPath, watchers, emitter, outputChannel);
+    } else {
+        outputChannel.appendLine(`[cursor-watcher] Plans folder not found: ${plansPath}`);
+    }
+
     for (const folder of workspaceFolders) {
         const workspacePath = folder.uri.fsPath;
         const projectName = workspacePath.replace(/\//g, '-').replace(/^-/, '');
@@ -48,6 +56,44 @@ export function setupCursorWatcher(
     });
 
     return emitter;
+}
+
+function watchPlansFolder(
+    dirPath: string,
+    watchers: fs.FSWatcher[],
+    emitter: ActivityEmitter,
+    outputChannel: vscode.OutputChannel
+) {
+    try {
+        const watcher = fs.watch(dirPath, (eventType, filename) => {
+            if (!vscode.window.state.focused) {
+                return;
+            }
+            
+            if (!filename || !filename.endsWith('.plan.md')) {
+                return;
+            }
+            
+            outputChannel.appendLine(`[cursor-watcher] Plan activity: ${eventType} - ${filename}`);
+            
+            const sourceFilePath = path.join(dirPath, filename);
+            
+            const event: ActivityEvent = {
+                source: 'agent',
+                timestamp: Date.now(),
+                entity: 'cursor-plan',
+                isWrite: true,
+                language: 'markdown',
+                category: 'planning',
+                sourceFile: sourceFilePath
+            };
+            
+            emitter.emit('activity', event);
+        });
+        watchers.push(watcher);
+    } catch (err) {
+        outputChannel.appendLine(`[cursor-watcher] Failed to watch plans folder: ${dirPath}`);
+    }
 }
 
 function watchAgentFolder(
