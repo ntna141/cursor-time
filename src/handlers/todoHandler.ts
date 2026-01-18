@@ -1,5 +1,5 @@
 import sqlite3 from 'sqlite3';
-import { TodoItem, insertTodo, updateTodoCompleted, deleteTodo, getTodosByDate } from '../storage';
+import { TodoItem, insertTodo, updateTodoCompleted, deleteTodo, getTodosByDate, getUnfinishedTodosBeforeDate, getCompletedTodosByDate, getTodayDateKey } from '../storage';
 
 export interface TodoMessage {
     command: string;
@@ -28,8 +28,20 @@ export class TodoHandler {
 
     public async getTodos(dateKey: string): Promise<TodoItem[]> {
         if (!this.cache.has(dateKey)) {
-            const todos = await getTodosByDate(this.db, dateKey);
-            this.cache.set(dateKey, todos);
+            const todayKey = getTodayDateKey();
+            const isToday = dateKey === todayKey;
+            
+            if (isToday) {
+                const [todayTodos, carriedOverTodos] = await Promise.all([
+                    getTodosByDate(this.db, dateKey),
+                    getUnfinishedTodosBeforeDate(this.db, dateKey)
+                ]);
+                const todos = [...carriedOverTodos, ...todayTodos];
+                this.cache.set(dateKey, todos);
+            } else {
+                const todos = await getCompletedTodosByDate(this.db, dateKey);
+                this.cache.set(dateKey, todos);
+            }
         }
         return this.cache.get(dateKey)!;
     }
@@ -71,6 +83,10 @@ export class TodoHandler {
 
     public invalidateCache(dateKey: string): void {
         this.cache.delete(dateKey);
+        const todayKey = getTodayDateKey();
+        if (dateKey !== todayKey) {
+            this.cache.delete(todayKey);
+        }
     }
 
     private schedulePersist(): void {

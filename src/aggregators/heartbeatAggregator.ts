@@ -4,6 +4,7 @@ import sqlite3 from 'sqlite3';
 import { v4 as uuidv4 } from 'uuid';
 import { ActivityEvent, ActivityType } from '../types';
 import { insertHeartbeat, Heartbeat } from '../storage';
+import { TodaySessionStore } from '../storage/todayStore';
 
 const HEARTBEAT_INTERVAL_MS = 60000; // agents often sends final summary, so if the threshold is low, every heartbeat will basically be an agent activity
 
@@ -13,10 +14,12 @@ export class HeartbeatAggregator {
     private db: sqlite3.Database;
     private outputChannel: vscode.OutputChannel;
     private heartbeatCallbacks: (() => void)[] = [];
+    private todayStore: TodaySessionStore;
 
-    constructor(db: sqlite3.Database, outputChannel: vscode.OutputChannel) {
+    constructor(db: sqlite3.Database, outputChannel: vscode.OutputChannel, todayStore: TodaySessionStore) {
         this.db = db;
         this.outputChannel = outputChannel;
+        this.todayStore = todayStore;
     }
 
     onHeartbeat(callback: () => void) {
@@ -81,6 +84,7 @@ export class HeartbeatAggregator {
         };
 
         insertHeartbeat(this.db, heartbeat);
+        this.todayStore.pushHeartbeat(heartbeat);
         
         this.heartbeatCallbacks.forEach(cb => cb());
 

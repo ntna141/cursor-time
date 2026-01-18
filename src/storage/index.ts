@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import sqlite3 from 'sqlite3';
 import { ActivityType } from '../types';
+import { SESSION_GAP_THRESHOLD_MS, PLANNING_STREAK_THRESHOLD } from '../utils/time';
 
 export interface Heartbeat {
     id: string;
@@ -172,9 +173,7 @@ export function insertHeartbeat(db: sqlite3.Database, heartbeat: Heartbeat) {
         heartbeat.has_file_activity ? 1 : 0,
         heartbeat.has_agent_activity ? 1 : 0,
         heartbeat.source_file ?? null
-    ], () => {
-        invalidateTodayCache(db);
-    });
+    ]);
 }
 
 export function getHeartbeatsByTimeRange(
@@ -233,76 +232,6 @@ export function getHeartbeatsByProject(
             } else {
                 resolve(rows.map(deserializeHeartbeat));
             }
-        });
-    });
-}
-
-export function detectSessions(
-    db: sqlite3.Database,
-    gapThresholdMs: number = 15 * 60 * 1000
-): Promise<Array<{
-    start: number;
-    end: number;
-    heartbeats: number;
-    projects: Set<string>;
-}>> {
-    return new Promise((resolve, reject) => {
-        db.all(`
-            SELECT 
-                id,
-                timestamp,
-                entity,
-                project,
-                LAG(timestamp) OVER (ORDER BY timestamp) as prev_timestamp
-            FROM heartbeats
-            ORDER BY timestamp
-        `, (err, rows: any[]) => {
-            if (err) {
-                reject(err);
-                return;
-            }
-
-            const sessions: Array<{
-                start: number;
-                end: number;
-                heartbeats: number;
-                projects: Set<string>;
-            }> = [];
-            
-            let currentSession = {
-                start: 0,
-                end: 0,
-                heartbeats: 0,
-                projects: new Set<string>()
-            };
-            
-            for (const row of rows) {
-                const gap = row.prev_timestamp ? row.timestamp - row.prev_timestamp : 0;
-                
-                if (gap > gapThresholdMs || currentSession.start === 0) {
-                    if (currentSession.start !== 0) {
-                        sessions.push({...currentSession, projects: new Set(currentSession.projects)});
-                    }
-                    currentSession = {
-                        start: row.timestamp,
-                        end: row.timestamp,
-                        heartbeats: 1,
-                        projects: new Set([row.project])
-                    };
-                } else {
-                    currentSession.end = row.timestamp;
-                    currentSession.heartbeats++;
-                    if (row.project) {
-                        currentSession.projects.add(row.project);
-                    }
-                }
-            }
-            
-            if (currentSession.start !== 0) {
-                sessions.push(currentSession);
-            }
-            
-            resolve(sessions);
         });
     });
 }
@@ -413,9 +342,6 @@ export function getDateRange(dateKey: string): { start: number; end: number } {
     const endOfDay = new Date(year, month - 1, day, 23, 59, 59, 999);
     return { start: startOfDay.getTime(), end: endOfDay.getTime() };
 }
-
-const SESSION_GAP_THRESHOLD_MS = 20 * 60 * 1000;
-const PLANNING_STREAK_THRESHOLD = 5;
 
 function computeSessionsFromHeartbeats(rows: any[]): Session[] {
     if (rows.length === 0) return [];
@@ -597,11 +523,6 @@ export function getDaySessions(
     });
 }
 
-export function invalidateTodayCache(db: sqlite3.Database): void {
-    const todayKey = getTodayDateKey();
-    db.run(`DELETE FROM daily_sessions_cache WHERE date_key = ?`, [todayKey]);
-}
-
 export function getTodosByDate(
     db: sqlite3.Database,
     dateKey: string
@@ -609,6 +530,56 @@ export function getTodosByDate(
     return new Promise((resolve, reject) => {
         db.all(
             `SELECT * FROM todos WHERE date_key = ? ORDER BY created_at ASC`,
+            [dateKey],
+            (err, rows: any[]) => {
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve(rows.map(row => ({
+                        id: row.id,
+                        dateKey: row.date_key,
+                        text: row.text,
+                        completed: row.completed === 1,
+                        createdAt: row.created_at
+                    })));
+                }
+            }
+        );
+    });
+}
+
+export function getUnfinishedTodosBeforeDate(
+    db: sqlite3.Database,
+    dateKey: string
+): Promise<TodoItem[]> {
+    return new Promise((resolve, reject) => {
+        db.all(
+            `SELECT * FROM todos WHERE date_key < ? AND completed = 0 ORDER BY date_key ASC, created_at ASC`,
+            [dateKey],
+            (err, rows: any[]) => {
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve(rows.map(row => ({
+                        id: row.id,
+                        dateKey: row.date_key,
+                        text: row.text,
+                        completed: row.completed === 1,
+                        createdAt: row.created_at
+                    })));
+                }
+            }
+        );
+    });
+}
+
+export function getCompletedTodosByDate(
+    db: sqlite3.Database,
+    dateKey: string
+): Promise<TodoItem[]> {
+    return new Promise((resolve, reject) => {
+        db.all(
+            `SELECT * FROM todos WHERE date_key = ? AND completed = 1 ORDER BY created_at ASC`,
             [dateKey],
             (err, rows: any[]) => {
                 if (err) {

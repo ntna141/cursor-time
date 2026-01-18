@@ -1,52 +1,74 @@
 import * as vscode from 'vscode';
 import sqlite3 from 'sqlite3';
 import { getDaySessions, getTodayDateKey, DaySessionSummary, TodoItem } from '../storage';
+import { TodaySessionStore } from '../storage/todayStore';
 import { TodoHandler } from '../handlers/todoHandler';
+import { formatDuration } from '../utils/time';
+
+class LRUCache<K, V> {
+    private cache = new Map<K, V>();
+    private maxSize: number;
+
+    constructor(maxSize: number) {
+        this.maxSize = maxSize;
+    }
+
+    get(key: K): V | undefined {
+        const value = this.cache.get(key);
+        if (value !== undefined) {
+            this.cache.delete(key);
+            this.cache.set(key, value);
+        }
+        return value;
+    }
+
+    set(key: K, value: V): void {
+        if (this.cache.has(key)) {
+            this.cache.delete(key);
+        } else if (this.cache.size >= this.maxSize) {
+            const oldest = this.cache.keys().next().value;
+            if (oldest !== undefined) {
+                this.cache.delete(oldest);
+            }
+        }
+        this.cache.set(key, value);
+    }
+
+    delete(key: K): void {
+        this.cache.delete(key);
+    }
+}
 
 export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'ntna-time.sessionsView';
-    private static readonly CACHE_DAYS = 14;
     private _view?: vscode.WebviewView;
     private db: sqlite3.Database;
+    private todayStore: TodaySessionStore;
     private currentDateKey: string;
-    private cache: Map<string, { summary: DaySessionSummary; todos: TodoItem[]; html: string }> = new Map();
+    private cache = new LRUCache<string, { summary: DaySessionSummary; todos: TodoItem[] }>(14);
     private isReady: boolean = false;
     private todoHandler: TodoHandler;
 
-    constructor(db: sqlite3.Database) {
+    constructor(db: sqlite3.Database, todayStore: TodaySessionStore) {
         this.db = db;
+        this.todayStore = todayStore;
         this.currentDateKey = getTodayDateKey();
         this.todoHandler = new TodoHandler(db);
     }
 
-    private isWithinCacheWindow(dateKey: string): boolean {
-        const [year, month, day] = dateKey.split('-').map(Number);
-        const date = new Date(year, month - 1, day);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const diffMs = today.getTime() - date.getTime();
-        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-        return diffDays >= 0 && diffDays < SessionsPanelProvider.CACHE_DAYS;
-    }
-
     public async preload(): Promise<void> {
         const todayKey = getTodayDateKey();
-        const [summary, todos] = await Promise.all([
-            getDaySessions(this.db, todayKey),
-            this.todoHandler.getTodos(todayKey)
-        ]);
-        const html = this.getHtml(summary, todos, true);
-        this.cache.set(todayKey, { summary, todos, html });
+        const summary = this.todayStore.getSummary();
+        const todos = await this.todoHandler.getTodos(todayKey);
         this.isReady = true;
         
         if (this._view) {
-            this._view.webview.html = html;
+            this._view.webview.html = this.getHtml(summary, todos, true);
         }
     }
 
-    public invalidateToday(): void {
+    public refreshToday(): void {
         const todayKey = getTodayDateKey();
-        this.cache.delete(todayKey);
         if (this._view && this.currentDateKey === todayKey) {
             this.updateView();
         }
@@ -65,13 +87,14 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         
         webviewView.onDidChangeVisibility(() => {
             if (webviewView.visible && this.currentDateKey === getTodayDateKey()) {
-                this.invalidateToday();
+                this.updateView();
             }
         });
 
         const cached = this.cache.get(this.currentDateKey);
         if (cached) {
-            webviewView.webview.html = cached.html;
+            const isToday = this.currentDateKey === getTodayDateKey();
+            webviewView.webview.html = this.getHtml(cached.summary, cached.todos, isToday);
         } else if (this.isReady) {
             this.updateView();
         } else {
@@ -130,37 +153,28 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     public async updateView(shouldFocusTodoInput: boolean = false) {
         if (!this._view) return;
 
-        const cached = this.cache.get(this.currentDateKey);
-        if (cached && !shouldFocusTodoInput) {
-            this._view.webview.html = cached.html;
-            return;
-        }
-
         const isToday = this.currentDateKey === getTodayDateKey();
-        const [summary, todos] = await Promise.all([
-            getDaySessions(this.db, this.currentDateKey),
-            this.todoHandler.getTodos(this.currentDateKey)
-        ]);
-        const html = this.getHtml(summary, todos, isToday, shouldFocusTodoInput);
+
+        if (!isToday) {
+            const cached = this.cache.get(this.currentDateKey);
+            if (cached && !shouldFocusTodoInput) {
+                this._view.webview.html = this.getHtml(cached.summary, cached.todos, isToday);
+                return;
+            }
+        }
+
+        const summary = isToday 
+            ? this.todayStore.getSummary()
+            : await getDaySessions(this.db, this.currentDateKey);
+        const todos = await this.todoHandler.getTodos(this.currentDateKey);
         
-        if (!isToday && this.isWithinCacheWindow(this.currentDateKey) && !shouldFocusTodoInput) {
-            this.cache.set(this.currentDateKey, { summary, todos, html });
+        if (!isToday && !shouldFocusTodoInput) {
+            this.cache.set(this.currentDateKey, { summary, todos });
         }
         
-        this._view.webview.html = html;
+        this._view.webview.html = this.getHtml(summary, todos, isToday, shouldFocusTodoInput);
     }
 
-    private formatDuration(ms: number): string {
-        const totalMinutes = Math.floor(ms / 60000);
-        const hours = Math.floor(totalMinutes / 60);
-        const minutes = totalMinutes % 60;
-
-        if (hours > 0) {
-            return `${hours}h ${minutes}m`;
-        } else {
-            return `${minutes}m`;
-        }
-    }
 
     private getTimelineHtml(sessions: Array<{ start: number; end: number; durationMs: number; projects: string[]; codingMs: number; planningMs: number }>): string {
         const filteredSessions = sessions.filter(s => s.durationMs >= 60000);
@@ -181,7 +195,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             const widthPercent = endPercent - startPercent;
             const centerPercent = startPercent + widthPercent / 2;
             
-            const duration = this.formatDuration(session.durationMs);
+            const duration = formatDuration(session.durationMs);
             const position = index % 2 === 0 ? 'top' : 'bottom';
             
             const totalActivity = (session.codingMs || 0) + (session.planningMs || 0);
@@ -196,10 +210,18 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             `;
         }).join('');
 
+        const hourMarkers = Array.from({ length: 24 }, (_, hour) => {
+            const hourPercent = (hour / 24) * 100;
+            return `<div class="hour-marker" style="left: ${hourPercent}%"><span class="hour-label">${hour}</span></div>`;
+        }).join('');
+
         return `
             <div class="timeline-container">
                 <div class="timeline-track">
                     ${bars}
+                </div>
+                <div class="timeline-hours">
+                    ${hourMarkers}
                 </div>
             </div>
         `;
@@ -325,7 +347,29 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             height: 24px;
             background: #24283b;
             margin-top: 25px;
-            margin-bottom: 25px;
+            margin-bottom: 8px;
+        }
+        .timeline-hours {
+            position: relative;
+            height: 16px;
+            margin-bottom: 8px;
+        }
+        .hour-marker {
+            position: absolute;
+            top: 0;
+            width: 1px;
+            height: 6px;
+            background: #414868;
+            transform: translateX(-50%);
+        }
+        .hour-label {
+            position: absolute;
+            top: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 8px;
+            color: #565f89;
+            white-space: nowrap;
         }
         .timeline-bar-container {
             position: absolute;
@@ -467,7 +511,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             <button class="nav-btn" id="nextBtn" ${isToday ? 'disabled' : ''}>&rarr;</button>
         </div>
         <div class="stats-row">
-            <span class="total-time">${this.formatDuration(summary.totalTimeMs)}</span>
+            <span class="total-time">${formatDuration(summary.totalTimeMs)}</span>
             <span class="session-count">(${filteredSessions.length} session${filteredSessions.length !== 1 ? 's' : ''})</span>
         </div>
         <div class="activity-breakdown">

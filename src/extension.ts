@@ -1,26 +1,18 @@
 import * as vscode from 'vscode';
 import sqlite3 from 'sqlite3';
 import * as path from 'path';
-import { createDirectory, createDatabase, getDaySessions, getRecentHeartbeats, getTodayDateKey } from './storage';
+import { createDirectory, createDatabase, getRecentHeartbeats, getTodayDateKey } from './storage';
+import { TodaySessionStore } from './storage/todayStore';
 import { setupFileWatcher } from './watchers/fileWatcher';
 import { setupCursorWatcher } from './watchers/cursorWatcher';
 import { HeartbeatAggregator } from './aggregators/heartbeatAggregator';
 import { SessionsPanelProvider } from './panels/sessionsPanel';
-
-function formatDuration(ms: number): string {
-    const totalMinutes = Math.floor(ms / 60000);
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    
-    if (hours > 0) {
-        return `${hours}h ${minutes}m`;
-    }
-    return `${minutes}m`;
-}
+import { formatDuration } from './utils/time';
 
 let dbInstance: sqlite3.Database | null = null;
 let aggregator: HeartbeatAggregator | null = null;
 let sessionsPanel: SessionsPanelProvider | null = null;
+let todayStore: TodaySessionStore | null = null;
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('EXTENSION: "ntna-time" is now active!');
@@ -28,11 +20,12 @@ export async function activate(context: vscode.ExtensionContext) {
     createDirectory(dbPath);
 
     dbInstance = await createDatabase(dbPath);
+    todayStore = new TodaySessionStore(dbInstance);
     
     const outputChannel = vscode.window.createOutputChannel('ntna-time');
     context.subscriptions.push(outputChannel);
 
-    aggregator = new HeartbeatAggregator(dbInstance, outputChannel);
+    aggregator = new HeartbeatAggregator(dbInstance, outputChannel, todayStore);
     
     const fileWatcher = setupFileWatcher(context);
     const cursorWatcher = setupCursorWatcher(context, outputChannel);
@@ -50,7 +43,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    sessionsPanel = new SessionsPanelProvider(dbInstance);
+    sessionsPanel = new SessionsPanelProvider(dbInstance, todayStore);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(
             SessionsPanelProvider.viewType,
@@ -63,6 +56,7 @@ export async function activate(context: vscode.ExtensionContext) {
         )
     );
     
+    await todayStore.load();
     sessionsPanel.preload();
     
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -70,34 +64,30 @@ export async function activate(context: vscode.ExtensionContext) {
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
 
-    async function updateStatusBar() {
-        try {
-            const summary = await getDaySessions(dbInstance!, getTodayDateKey());
-            const parts: string[] = [];
-            
-            if (summary.totalCodingMs > 0) {
-                parts.push(`${formatDuration(summary.totalCodingMs)} coding`);
-            }
-            if (summary.totalPlanningMs > 0) {
-                parts.push(`${formatDuration(summary.totalPlanningMs)} planning`);
-            }
-            
-            if (parts.length > 0) {
-                statusBarItem.text = `$(clock) ${parts.join(' | ')}`;
-                statusBarItem.tooltip = `Today: ${formatDuration(summary.totalTimeMs)} total\nCoding: ${formatDuration(summary.totalCodingMs)}\nPlanning: ${formatDuration(summary.totalPlanningMs)}`;
-            } else {
-                statusBarItem.text = "$(clock) 0m";
-                statusBarItem.tooltip = "No activity tracked today";
-            }
-        } catch (err) {
-            console.error('Failed to update status bar:', err);
+    function updateStatusBar() {
+        const summary = todayStore!.getSummary();
+        const parts: string[] = [];
+        
+        if (summary.totalCodingMs > 0) {
+            parts.push(`${formatDuration(summary.totalCodingMs)} coding`);
+        }
+        if (summary.totalPlanningMs > 0) {
+            parts.push(`${formatDuration(summary.totalPlanningMs)} planning`);
+        }
+        
+        if (parts.length > 0) {
+            statusBarItem.text = `$(clock) ${parts.join(' | ')}`;
+            statusBarItem.tooltip = `Today: ${formatDuration(summary.totalTimeMs)} total\nCoding: ${formatDuration(summary.totalCodingMs)}\nPlanning: ${formatDuration(summary.totalPlanningMs)}`;
+        } else {
+            statusBarItem.text = "$(clock) 0m";
+            statusBarItem.tooltip = "No activity tracked today";
         }
     }
 
     updateStatusBar();
 
     aggregator.onHeartbeat(() => {
-        sessionsPanel!.invalidateToday();
+        sessionsPanel!.refreshToday();
         updateStatusBar();
     });
 
