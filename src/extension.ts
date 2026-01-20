@@ -13,6 +13,18 @@ let dbInstance: sqlite3.Database | null = null;
 let aggregator: HeartbeatAggregator | null = null;
 let sessionsPanel: SessionsPanelProvider | null = null;
 let todayStore: TodaySessionStore | null = null;
+let midnightTimeout: NodeJS.Timeout | null = null;
+
+function scheduleMidnightRefresh(callback: () => void): NodeJS.Timeout {
+    const now = new Date();
+    const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
+    const msUntilMidnight = tomorrow.getTime() - now.getTime();
+    
+    return setTimeout(() => {
+        callback();
+        midnightTimeout = scheduleMidnightRefresh(callback);
+    }, msUntilMidnight);
+}
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('EXTENSION: "ntna-time" is now active!');
@@ -58,6 +70,21 @@ export async function activate(context: vscode.ExtensionContext) {
     
     await todayStore.load();
     sessionsPanel.preload();
+    
+    midnightTimeout = scheduleMidnightRefresh(async () => {
+        await todayStore!.load();
+        sessionsPanel!.refreshToday();
+        updateStatusBar();
+    });
+    
+    context.subscriptions.push({
+        dispose: () => {
+            if (midnightTimeout) {
+                clearTimeout(midnightTimeout);
+                midnightTimeout = null;
+            }
+        }
+    });
     
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBarItem.text = "$(clock) 0m";
@@ -158,6 +185,10 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 export async function deactivate() {
+    if (midnightTimeout) {
+        clearTimeout(midnightTimeout);
+        midnightTimeout = null;
+    }
     if (sessionsPanel) {
         await sessionsPanel.dispose();
     }
