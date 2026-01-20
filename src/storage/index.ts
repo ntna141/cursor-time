@@ -483,7 +483,7 @@ export function getDaySessions(
                     return;
                 }
 
-                if (cacheRow && !isToday) {
+                if (cacheRow) {
                     const sessions = JSON.parse(cacheRow.sessions_json);
                     const totalCodingMs = sessions.reduce((sum: number, s: Session) => sum + (s.codingMs || 0), 0);
                     const totalPlanningMs = sessions.reduce((sum: number, s: Session) => sum + (s.planningMs || 0), 0);
@@ -521,9 +521,9 @@ export function getDaySessions(
                         }
 
                         const sessions = computeSessionsFromHeartbeats(rows);
-                        const totalTimeMs = sessions.reduce((sum, s) => sum + s.durationMs, 0);
                         const totalCodingMs = sessions.reduce((sum, s) => sum + s.codingMs, 0);
                         const totalPlanningMs = sessions.reduce((sum, s) => sum + s.planningMs, 0);
+                        const totalTimeMs = totalCodingMs + totalPlanningMs;
                         const lastHeartbeatId = rows[rows.length - 1].id;
 
                         db.run(
@@ -670,6 +670,63 @@ export function updateTodoSortOrder(db: sqlite3.Database, id: string, sortOrder:
             `UPDATE todos SET sort_order = ? WHERE id = ?`,
             [sortOrder, id],
             (err) => err ? reject(err) : resolve()
+        );
+    });
+}
+
+export function clearSessionCache(db: sqlite3.Database): Promise<void> {
+    return new Promise((resolve, reject) => {
+        db.run(`DELETE FROM daily_sessions_cache`, (err) => err ? reject(err) : resolve());
+    });
+}
+
+export function recalculateAllCachedDays(db: sqlite3.Database): Promise<number> {
+    return new Promise((resolve, reject) => {
+        db.all(
+            `SELECT DISTINCT strftime('%Y-%m-%d', timestamp / 1000, 'unixepoch', 'localtime') as date_key FROM heartbeats ORDER BY date_key`,
+            [],
+            async (err, rows: any[]) => {
+                if (err) {
+                    reject(err);
+                    return;
+                }
+
+                const today = getTodayDateKey();
+                let recalculated = 0;
+
+                for (const row of rows) {
+                    const dateKey = row.date_key;
+                    if (dateKey === today) continue;
+
+                    const { start, end } = getDateRange(dateKey);
+                    const heartbeats = await new Promise<any[]>((resolve, reject) => {
+                        db.all(
+                            `SELECT id, timestamp, project, activity_type FROM heartbeats WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC`,
+                            [start, end],
+                            (err, rows: any[]) => err ? reject(err) : resolve(rows)
+                        );
+                    });
+
+                    if (heartbeats.length > 0) {
+                        const sessions = computeSessionsFromHeartbeats(heartbeats);
+                        const totalCodingMs = sessions.reduce((sum, s) => sum + s.codingMs, 0);
+                        const totalPlanningMs = sessions.reduce((sum, s) => sum + s.planningMs, 0);
+                        const totalTimeMs = totalCodingMs + totalPlanningMs;
+                        const lastHeartbeatId = heartbeats[heartbeats.length - 1].id;
+
+                        await new Promise<void>((resolve, reject) => {
+                            db.run(
+                                `INSERT OR REPLACE INTO daily_sessions_cache (date_key, session_count, total_time_ms, sessions_json, last_heartbeat_id, computed_at) VALUES (?, ?, ?, ?, ?, ?)`,
+                                [dateKey, sessions.length, totalTimeMs, JSON.stringify(sessions), lastHeartbeatId, Date.now()],
+                                (err) => err ? reject(err) : resolve()
+                            );
+                        });
+                        recalculated++;
+                    }
+                }
+
+                resolve(recalculated);
+            }
         );
     });
 }

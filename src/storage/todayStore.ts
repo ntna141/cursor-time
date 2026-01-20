@@ -38,6 +38,7 @@ export class TodaySessionStore {
     private ensureCurrentDate(): boolean {
         const currentDateKey = getTodayDateKey();
         if (this.state.dateKey !== currentDateKey) {
+            this.cachePreviousDay();
             this.state = {
                 dateKey: currentDateKey,
                 sessions: [],
@@ -47,6 +48,24 @@ export class TodaySessionStore {
             return true;
         }
         return false;
+    }
+
+    private cachePreviousDay(): void {
+        if (this.state.sessions.length === 0 && !this.state.activeSession) {
+            return;
+        }
+
+        const summary = this.getSummary();
+        
+        this.db.run(
+            `INSERT OR REPLACE INTO daily_sessions_cache (date_key, session_count, total_time_ms, sessions_json, last_heartbeat_id, computed_at) VALUES (?, ?, ?, ?, ?, ?)`,
+            [summary.dateKey, summary.sessionCount, summary.totalTimeMs, JSON.stringify(summary.sessions), null, Date.now()],
+            (err) => {
+                if (err) {
+                    console.error('Failed to cache previous day:', err);
+                }
+            }
+        );
     }
 
     async load(): Promise<void> {
