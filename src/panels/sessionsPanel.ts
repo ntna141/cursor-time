@@ -45,6 +45,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     private db: sqlite3.Database;
     private todayStore: TodaySessionStore;
     private currentDateKey: string;
+    private viewingToday: boolean = true;
     private cache = new LRUCache<string, { summary: DaySessionSummary; todos: TodoItem[] }>(14);
     private isReady: boolean = false;
     private todoHandler: TodoHandler;
@@ -85,8 +86,15 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             enableScripts: true
         };
         
-        webviewView.onDidChangeVisibility(() => {
-            if (webviewView.visible && this.currentDateKey === getTodayDateKey()) {
+        webviewView.onDidChangeVisibility(async () => {
+            if (webviewView.visible) {
+                if (this.viewingToday) {
+                    const actualToday = getTodayDateKey();
+                    if (this.currentDateKey !== actualToday) {
+                        this.currentDateKey = actualToday;
+                        await this.todayStore.load();
+                    }
+                }
                 this.updateView();
             }
         });
@@ -104,9 +112,11 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         webviewView.webview.onDidReceiveMessage(async (message) => {
             if (message.command === 'prevDay') {
                 this.currentDateKey = this.getOffsetDateKey(this.currentDateKey, -1);
+                this.viewingToday = false;
                 await this.updateView();
             } else if (message.command === 'nextDay') {
                 this.currentDateKey = this.getOffsetDateKey(this.currentDateKey, 1);
+                this.viewingToday = this.currentDateKey === getTodayDateKey();
                 await this.updateView();
             } else if (await this.todoHandler.handleMessage(message, this.currentDateKey)) {
                 this.cache.delete(this.currentDateKey);
