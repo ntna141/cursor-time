@@ -38,28 +38,66 @@ export class TodaySessionStore {
     private ensureCurrentDate(): boolean {
         const currentDateKey = getTodayDateKey();
         if (this.state.dateKey !== currentDateKey) {
-            this.cachePreviousDay();
+            const previousState = this.state;
             this.state = {
                 dateKey: currentDateKey,
                 sessions: [],
                 activeSession: null,
                 lastHeartbeatTimestamp: 0
             };
+            this.cachePreviousDay(previousState);
             return true;
         }
         return false;
     }
 
-    private cachePreviousDay(): void {
-        if (this.state.sessions.length === 0 && !this.state.activeSession) {
+    private cachePreviousDay(previousState: TodayState): void {
+        if (previousState.sessions.length === 0 && !previousState.activeSession) {
             return;
         }
 
-        const summary = this.getSummary();
+        const allSessions = [...previousState.sessions];
+        
+        if (previousState.activeSession) {
+            const session = previousState.activeSession;
+            const lastWasPlanning = session.planningStreak > 0;
+            
+            let codingMs = session.codingMs;
+            let planningMs = session.planningMs;
+            const activitySegments = [...session.activitySegments];
+            
+            if (session.end > session.currentActivityStart) {
+                const duration = session.end - session.currentActivityStart;
+                const isTruePlanning = lastWasPlanning && session.planningStreak >= PLANNING_STREAK_THRESHOLD;
+                if (isTruePlanning) {
+                    planningMs += duration;
+                } else {
+                    codingMs += duration;
+                }
+                activitySegments.push({
+                    start: session.currentActivityStart,
+                    end: session.end,
+                    type: isTruePlanning ? 'planning' : 'coding'
+                });
+            }
+
+            allSessions.push({
+                start: session.start,
+                end: session.end,
+                durationMs: session.end - session.start,
+                heartbeats: session.heartbeats,
+                projects: Array.from(session.projects),
+                codingMs,
+                planningMs,
+                activitySegments
+            });
+        }
+
+        const totalTimeMs = allSessions.reduce((sum, s) => sum + s.durationMs, 0);
         
         this.db.run(
             `INSERT OR REPLACE INTO daily_sessions_cache (date_key, session_count, total_time_ms, sessions_json, last_heartbeat_id, computed_at) VALUES (?, ?, ?, ?, ?, ?)`,
-            [summary.dateKey, summary.sessionCount, summary.totalTimeMs, JSON.stringify(summary.sessions), null, Date.now()],
+            [previousState.dateKey, allSessions.length, totalTimeMs, JSON.stringify(allSessions), null, Date.now()],
             (err) => {
                 if (err) {
                     console.error('Failed to cache previous day:', err);

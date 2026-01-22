@@ -55,6 +55,13 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         this.todayStore = todayStore;
         this.currentDateKey = getTodayDateKey();
         this.todoHandler = new TodoHandler(db);
+        
+        vscode.window.onDidChangeWindowState(async (state) => {
+            if (state.focused && this._view?.visible) {
+                await this.ensureTodayUpdated();
+                this.updateView();
+            }
+        });
     }
 
     public async preload(): Promise<void> {
@@ -88,13 +95,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         
         webviewView.onDidChangeVisibility(async () => {
             if (webviewView.visible) {
-                if (this.viewingToday) {
-                    const actualToday = getTodayDateKey();
-                    if (this.currentDateKey !== actualToday) {
-                        this.currentDateKey = actualToday;
-                        await this.todayStore.load();
-                    }
-                }
+                await this.ensureTodayUpdated();
                 this.updateView();
             }
         });
@@ -110,6 +111,15 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         }
 
         webviewView.webview.onDidReceiveMessage(async (message) => {
+            if (message.command === 'prevDay' || message.command === 'nextDay') {
+                if (this.viewingToday) {
+                    const actualToday = getTodayDateKey();
+                    if (this.currentDateKey !== actualToday) {
+                        await this.todayStore.load();
+                    }
+                }
+            }
+            
             if (message.command === 'prevDay') {
                 this.currentDateKey = this.getOffsetDateKey(this.currentDateKey, -1);
                 this.viewingToday = false;
@@ -158,6 +168,16 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         const date = new Date(year, month - 1, day);
         date.setDate(date.getDate() + offset);
         return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    }
+
+    private async ensureTodayUpdated(): Promise<void> {
+        if (this.viewingToday) {
+            const actualToday = getTodayDateKey();
+            if (this.currentDateKey !== actualToday) {
+                this.currentDateKey = actualToday;
+                await this.todayStore.load();
+            }
+        }
     }
 
     public async updateView(shouldFocusTodoInput: boolean = false) {

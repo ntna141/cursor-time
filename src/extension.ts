@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import sqlite3 from 'sqlite3';
 import * as path from 'path';
-import { createDirectory, createDatabase, getRecentHeartbeats, getTodayDateKey } from './storage';
+import { createDirectory, createDatabase, getRecentHeartbeats } from './storage';
 import { TodaySessionStore } from './storage/todayStore';
 import { setupFileWatcher } from './watchers/fileWatcher';
 import { setupCursorWatcher } from './watchers/cursorWatcher';
