@@ -14,6 +14,7 @@ export class HeartbeatAggregator {
     private db: sqlite3.Database;
     private outputChannel: vscode.OutputChannel;
     private heartbeatCallbacks: (() => void)[] = [];
+    private tickCallbacks: (() => void)[] = [];
     private todayStore: TodaySessionStore;
 
     constructor(db: sqlite3.Database, outputChannel: vscode.OutputChannel, todayStore: TodaySessionStore) {
@@ -24,6 +25,10 @@ export class HeartbeatAggregator {
 
     onHeartbeat(callback: () => void) {
         this.heartbeatCallbacks.push(callback);
+    }
+
+    onTick(callback: () => void) {
+        this.tickCallbacks.push(callback);
     }
 
     start() {
@@ -43,7 +48,10 @@ export class HeartbeatAggregator {
     }
 
     private flush() {
-        if (this.eventBuffer.length === 0) return;
+        if (this.eventBuffer.length === 0) {
+            this.tickCallbacks.forEach(cb => cb());
+            return;
+        }
 
         const fileEvents = this.eventBuffer.filter(e => e.source === 'file');
         const agentEvents = this.eventBuffer.filter(e => e.source === 'agent');

@@ -64,8 +64,8 @@ export async function activate(context: vscode.ExtensionContext) {
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
 
-    function updateStatusBar() {
-        const summary = todayStore!.getSummary();
+    function updateStatusBar(summary?: ReturnType<TodaySessionStore['getSummary']>) {
+        summary = summary ?? todayStore!.getSummary();
         const parts: string[] = [];
         
         if (summary.totalCodingMs > 0) {
@@ -86,9 +86,14 @@ export async function activate(context: vscode.ExtensionContext) {
 
     updateStatusBar();
 
-    aggregator.onHeartbeat(() => {
+    aggregator.onTick(() => {
         sessionsPanel!.refreshToday();
-        updateStatusBar();
+    });
+
+    aggregator.onHeartbeat(() => {
+        const summary = todayStore!.getSummary();
+        sessionsPanel!.refreshToday(summary);
+        updateStatusBar(summary);
     });
 
     const showHeartbeatsCommand = vscode.commands.registerCommand('ntna-time.showHeartbeats', async () => {

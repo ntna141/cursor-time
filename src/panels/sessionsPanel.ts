@@ -75,10 +75,10 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    public refreshToday(): void {
+    public refreshToday(summary?: DaySessionSummary): void {
         const todayKey = getTodayDateKey();
-        if (this._view && this.currentDateKey === todayKey) {
-            this.updateView();
+        if (this._view && this._view.visible && this.currentDateKey === todayKey) {
+            this.updateView(false, summary);
         }
     }
 
@@ -180,7 +180,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    public async updateView(shouldFocusTodoInput: boolean = false) {
+    public async updateView(shouldFocusTodoInput: boolean = false, precomputedSummary?: DaySessionSummary) {
         if (!this._view) return;
 
         const isToday = this.currentDateKey === getTodayDateKey();
@@ -193,9 +193,9 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             }
         }
 
-        const summary = isToday 
+        const summary = precomputedSummary ?? (isToday 
             ? this.todayStore.getSummary()
-            : await getDaySessions(this.db, this.currentDateKey);
+            : await getDaySessions(this.db, this.currentDateKey));
         const todos = await this.todoHandler.getTodos(this.currentDateKey);
         
         if (!isToday && !shouldFocusTodoInput) {
