@@ -801,9 +801,9 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         const diffMin = Math.floor(diffMs / 60000);
         
         if (diffMin < 1) {
-            return '(last active just now)';
+            return '(last seen just now)';
         }
-        return `(last active ${diffMin} min ago)`;
+        return `(last seen ${diffMin} min ago)`;
     }
 
     private escapeHtml(text: string): string {
