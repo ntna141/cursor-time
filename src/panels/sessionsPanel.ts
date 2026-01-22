@@ -623,7 +623,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         </div>
         <div class="stats-row">
             <span class="total-time">${formatDuration(summary.totalTimeMs)}</span>
-            <span class="session-count">(${filteredSessions.length} session${filteredSessions.length !== 1 ? 's' : ''})</span>
+            <span class="session-count">${isToday ? this.getLastActiveText(filteredSessions) : `(${filteredSessions.length} session${filteredSessions.length !== 1 ? 's' : ''})`}</span>
         </div>
     </div>
     <h2 class="section-header">sessions</h2>
@@ -789,6 +789,21 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     </script>
 </body>
 </html>`;
+    }
+
+    private getLastActiveText(sessions: Array<{ end: number }>): string {
+        if (sessions.length === 0) {
+            return '';
+        }
+        const lastSession = sessions[sessions.length - 1];
+        const now = Date.now();
+        const diffMs = now - lastSession.end;
+        const diffMin = Math.floor(diffMs / 60000);
+        
+        if (diffMin < 1) {
+            return '(last active just now)';
+        }
+        return `(last active ${diffMin} min ago)`;
     }
 
     private escapeHtml(text: string): string {

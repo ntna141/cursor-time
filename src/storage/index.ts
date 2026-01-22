@@ -605,10 +605,9 @@ export function getCompletedTodosByDate(
     dateKey: string
 ): Promise<TodoItem[]> {
     return new Promise((resolve, reject) => {
-        const { start, end } = getDateRange(dateKey);
         db.all(
-            `SELECT * FROM todos WHERE completed = 1 AND completed_at BETWEEN ? AND ? ORDER BY sort_order ASC, created_at ASC`,
-            [start, end],
+            `SELECT * FROM todos WHERE date_key = ? AND completed = 1 ORDER BY sort_order ASC, created_at ASC`,
+            [dateKey],
             (err, rows: any[]) => {
                 if (err) {
                     reject(err);
@@ -638,13 +637,21 @@ export function insertTodo(db: sqlite3.Database, todo: TodoItem): Promise<void> 
     });
 }
 
-export function updateTodoCompleted(db: sqlite3.Database, id: string, completed: boolean, completedAt?: number): Promise<void> {
+export function updateTodoCompleted(db: sqlite3.Database, id: string, completed: boolean, completedAt?: number, dateKey?: string): Promise<void> {
     return new Promise((resolve, reject) => {
-        db.run(
-            `UPDATE todos SET completed = ?, completed_at = ? WHERE id = ?`,
-            [completed ? 1 : 0, completed ? (completedAt ?? Date.now()) : null, id],
-            (err) => err ? reject(err) : resolve()
-        );
+        if (dateKey) {
+            db.run(
+                `UPDATE todos SET completed = ?, completed_at = ?, date_key = ? WHERE id = ?`,
+                [completed ? 1 : 0, completed ? (completedAt ?? Date.now()) : null, dateKey, id],
+                (err) => err ? reject(err) : resolve()
+            );
+        } else {
+            db.run(
+                `UPDATE todos SET completed = ?, completed_at = ? WHERE id = ?`,
+                [completed ? 1 : 0, completed ? (completedAt ?? Date.now()) : null, id],
+                (err) => err ? reject(err) : resolve()
+            );
+        }
     });
 }
 

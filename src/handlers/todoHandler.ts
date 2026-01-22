@@ -18,6 +18,7 @@ interface PendingChange {
     completedAt?: number;
     text?: string;
     sortOrder?: number;
+    dateKey?: string;
 }
 
 export class TodoHandler {
@@ -86,7 +87,12 @@ export class TodoHandler {
             if (todo) {
                 todo.completed = message.completed!;
                 todo.completedAt = todo.completed ? Date.now() : undefined;
-                this.pendingChanges.set(todo.id, { type: 'update', id: todo.id, completed: todo.completed, completedAt: todo.completedAt });
+                if (todo.completed && todo.dateKey !== dateKey) {
+                    todo.dateKey = dateKey;
+                    this.pendingChanges.set(todo.id, { type: 'update', id: todo.id, completed: todo.completed, completedAt: todo.completedAt, dateKey: dateKey });
+                } else {
+                    this.pendingChanges.set(todo.id, { type: 'update', id: todo.id, completed: todo.completed, completedAt: todo.completedAt });
+                }
                 this.schedulePersist();
             }
             return true;
@@ -142,7 +148,7 @@ export class TodoHandler {
             if (change.type === 'insert' && change.todo) {
                 await insertTodo(this.db, change.todo);
             } else if (change.type === 'update' && change.id) {
-                await updateTodoCompleted(this.db, change.id, change.completed!, change.completedAt);
+                await updateTodoCompleted(this.db, change.id, change.completed!, change.completedAt, change.dateKey);
             } else if (change.type === 'edit' && change.id && change.text !== undefined) {
                 await updateTodoText(this.db, change.id, change.text);
             } else if (change.type === 'delete' && change.id) {
