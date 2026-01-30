@@ -59,7 +59,7 @@ export async function activate(context: vscode.ExtensionContext) {
     await todayStore.load();
     sessionsPanel.preload();
     
-    const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -100);
     statusBarItem.text = "$(clock) 0m";
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
@@ -74,9 +74,19 @@ export async function activate(context: vscode.ExtensionContext) {
         if (summary.totalPlanningMs > 0) {
             parts.push(`${formatDuration(summary.totalPlanningMs)} planning`);
         }
+
+        const lastHeartbeatTimestamp = todayStore!.getLastHeartbeatTimestamp();
+        const lastActiveSuffix = (() => {
+            if (!lastHeartbeatTimestamp) return '';
+            const diffMs = Date.now() - lastHeartbeatTimestamp;
+            if (diffMs < 0) return '';
+            const minutes = Math.floor(diffMs / 60000);
+            if (minutes <= 0) return ' (active just now)';
+            return `(active ${minutes} min${minutes === 1 ? '' : 's'} ago)`;
+        })();
         
         if (parts.length > 0) {
-            statusBarItem.text = `$(clock) ${parts.join(' | ')}`;
+            statusBarItem.text = `$(clock) ${parts.join(' | ')}${lastActiveSuffix}`;
             statusBarItem.tooltip = `Today: ${formatDuration(summary.totalTimeMs)} total\nCoding: ${formatDuration(summary.totalCodingMs)}\nPlanning: ${formatDuration(summary.totalPlanningMs)}`;
         } else {
             statusBarItem.text = "$(clock) 0m";

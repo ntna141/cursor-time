@@ -233,6 +233,11 @@ export class TodaySessionStore {
         this.processHeartbeat(heartbeat.timestamp, heartbeat.project || null, isPlanning);
     }
 
+    getLastHeartbeatTimestamp(): number {
+        this.ensureCurrentDate();
+        return this.state.lastHeartbeatTimestamp;
+    }
+
     getSummary(): DaySessionSummary {
         if (this.ensureCurrentDate()) {
             return {
