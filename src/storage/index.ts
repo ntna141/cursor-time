@@ -51,6 +51,14 @@ export interface DaySessionSummary {
     totalPlanningMs: number;
 }
 
+export interface StatsSummary {
+    totalThisWeekMs: number;
+    totalLastWeekMs: number;
+    dailyAverageThisYearMs: number;
+    dailyAverageLastYearMs: number;
+    hasLastYearData: boolean;
+}
+
 export interface TodoItem {
     id: string;
     dateKey: string;
@@ -132,6 +140,19 @@ export function createDatabase(dir: string): Promise<sqlite3.Database> {
                             return;
                         }
                         
+                        db.run(`
+                            CREATE TABLE IF NOT EXISTS aggregate_sessions_cache (
+                                range_key TEXT PRIMARY KEY,
+                                total_time_ms INTEGER NOT NULL,
+                                computed_at INTEGER NOT NULL
+                            )
+                        `, (err) => {
+                            if (err) {
+                                reject(err);
+                                return;
+                            }
+                        });
+
                         resolve(db);
 
                         db.run(`CREATE INDEX IF NOT EXISTS idx_todos_date ON todos(date_key)`);
@@ -355,6 +376,209 @@ export function getDateRange(dateKey: string): { start: number; end: number } {
     return { start: startOfDay.getTime(), end: endOfDay.getTime() };
 }
 
+function getDateKeyFromDate(date: Date): string {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function getStartOfWeek(date: Date): Date {
+    const day = date.getDay();
+    const offset = day === 0 ? -6 : 1 - day;
+    const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    start.setDate(start.getDate() + offset);
+    start.setHours(0, 0, 0, 0);
+    return start;
+}
+
+function addDays(date: Date, days: number): Date {
+    const result = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    result.setDate(result.getDate() + days);
+    return result;
+}
+
+function getYearDays(year: number): number {
+    const start = new Date(year, 0, 1);
+    const end = new Date(year + 1, 0, 1);
+    return Math.round((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+function getDailyCacheSumAndCount(
+    db: sqlite3.Database,
+    startKey: string,
+    endKey: string
+): Promise<{ totalMs: number; dayCount: number }> {
+    return new Promise((resolve, reject) => {
+        db.get(
+            `SELECT COALESCE(SUM(total_time_ms), 0) as total_time_ms, COUNT(*) as day_count FROM daily_sessions_cache WHERE date_key BETWEEN ? AND ?`,
+            [startKey, endKey],
+            (err, row: any) => {
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve({ totalMs: row.total_time_ms || 0, dayCount: row.day_count || 0 });
+                }
+            }
+        );
+    });
+}
+
+async function getDailyCacheTotal(db: sqlite3.Database, dateKey: string): Promise<number | null> {
+    return new Promise((resolve, reject) => {
+        db.get(
+            `SELECT total_time_ms FROM daily_sessions_cache WHERE date_key = ?`,
+            [dateKey],
+            (err, row: any) => {
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve(row ? row.total_time_ms : null);
+                }
+            }
+        );
+    });
+}
+
+async function upsertAggregateCache(
+    db: sqlite3.Database,
+    rangeKey: string,
+    startKey: string,
+    endKey: string
+): Promise<number> {
+    const { totalMs } = await getDailyCacheSumAndCount(db, startKey, endKey);
+    await new Promise<void>((resolve, reject) => {
+        db.run(
+            `INSERT OR REPLACE INTO aggregate_sessions_cache (range_key, total_time_ms, computed_at) VALUES (?, ?, ?)`,
+            [rangeKey, totalMs, Date.now()],
+            (err) => err ? reject(err) : resolve()
+        );
+    });
+    return totalMs;
+}
+
+async function updateAggregateWithDelta(
+    db: sqlite3.Database,
+    rangeKey: string,
+    startKey: string,
+    endKey: string,
+    deltaMs: number
+): Promise<void> {
+    const cached = await new Promise<number | null>((resolve, reject) => {
+        db.get(
+            `SELECT total_time_ms FROM aggregate_sessions_cache WHERE range_key = ?`,
+            [rangeKey],
+            (err, row: any) => {
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve(row ? row.total_time_ms : null);
+                }
+            }
+        );
+    });
+
+    if (cached !== null) {
+        await new Promise<void>((resolve, reject) => {
+            db.run(
+                `UPDATE aggregate_sessions_cache SET total_time_ms = ?, computed_at = ? WHERE range_key = ?`,
+                [cached + deltaMs, Date.now(), rangeKey],
+                (err) => err ? reject(err) : resolve()
+            );
+        });
+        return;
+    }
+
+    await upsertAggregateCache(db, rangeKey, startKey, endKey);
+}
+
+async function getAggregateTotalMs(
+    db: sqlite3.Database,
+    rangeKey: string,
+    startKey: string,
+    endKey: string
+): Promise<number> {
+    const cached = await new Promise<number | null>((resolve, reject) => {
+        db.get(
+            `SELECT total_time_ms FROM aggregate_sessions_cache WHERE range_key = ?`,
+            [rangeKey],
+            (err, row: any) => {
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve(row ? row.total_time_ms : null);
+                }
+            }
+        );
+    });
+    if (cached !== null) {
+        return cached;
+    }
+    return upsertAggregateCache(db, rangeKey, startKey, endKey);
+}
+
+export async function updateAggregateCachesForDate(
+    db: sqlite3.Database,
+    dateKey: string,
+    previousTotalMs: number,
+    newTotalMs: number
+): Promise<void> {
+    const deltaMs = newTotalMs - previousTotalMs;
+    if (deltaMs === 0) {
+        return;
+    }
+    const [year, month, day] = dateKey.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    const weekStart = getStartOfWeek(date);
+    const weekEnd = addDays(weekStart, 6);
+    const weekStartKey = getDateKeyFromDate(weekStart);
+    const weekEndKey = getDateKeyFromDate(weekEnd);
+    const weekKey = `week:${weekStartKey}`;
+    const yearKey = `year:${year}`;
+    const yearStartKey = `${year}-01-01`;
+    const yearEndKey = `${year}-12-31`;
+    await updateAggregateWithDelta(db, weekKey, weekStartKey, weekEndKey, deltaMs);
+    await updateAggregateWithDelta(db, yearKey, yearStartKey, yearEndKey, deltaMs);
+}
+
+export async function getStatsSummary(db: sqlite3.Database, date: Date = new Date()): Promise<StatsSummary> {
+    const weekStart = getStartOfWeek(date);
+    const weekEnd = addDays(weekStart, 6);
+    const weekStartKey = getDateKeyFromDate(weekStart);
+    const weekEndKey = getDateKeyFromDate(weekEnd);
+    const weekKey = `week:${weekStartKey}`;
+
+    const lastWeekStart = addDays(weekStart, -7);
+    const lastWeekEnd = addDays(lastWeekStart, 6);
+    const lastWeekStartKey = getDateKeyFromDate(lastWeekStart);
+    const lastWeekEndKey = getDateKeyFromDate(lastWeekEnd);
+    const lastWeekKey = `week:${lastWeekStartKey}`;
+
+    const thisYear = date.getFullYear();
+    const lastYear = thisYear - 1;
+    const thisYearKey = `year:${thisYear}`;
+    const lastYearKey = `year:${lastYear}`;
+    const thisYearStartKey = `${thisYear}-01-01`;
+    const thisYearEndKey = `${thisYear}-12-31`;
+    const lastYearStartKey = `${lastYear}-01-01`;
+    const lastYearEndKey = `${lastYear}-12-31`;
+
+    const totalThisWeekMs = await getAggregateTotalMs(db, weekKey, weekStartKey, weekEndKey);
+    const totalLastWeekMs = await getAggregateTotalMs(db, lastWeekKey, lastWeekStartKey, lastWeekEndKey);
+    const totalThisYearMs = await getAggregateTotalMs(db, thisYearKey, thisYearStartKey, thisYearEndKey);
+    const totalLastYearMs = await getAggregateTotalMs(db, lastYearKey, lastYearStartKey, lastYearEndKey);
+    const { dayCount: lastYearDayCount } = await getDailyCacheSumAndCount(db, lastYearStartKey, lastYearEndKey);
+
+    const daysElapsed = Math.max(1, Math.round((new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime() - new Date(thisYear, 0, 1).getTime()) / (24 * 60 * 60 * 1000)) + 1);
+    const dailyAverageThisYearMs = Math.floor(totalThisYearMs / daysElapsed);
+    const dailyAverageLastYearMs = Math.floor(totalLastYearMs / getYearDays(lastYear));
+
+    return {
+        totalThisWeekMs,
+        totalLastWeekMs,
+        dailyAverageThisYearMs,
+        dailyAverageLastYearMs,
+        hasLastYearData: lastYearDayCount > 0
+    };
+}
+
 function computeSessionsFromHeartbeats(rows: any[]): Session[] {
     if (rows.length === 0) return [];
 
@@ -502,43 +726,52 @@ export function getDaySessions(
                 db.all(
                     `SELECT id, timestamp, project, activity_type FROM heartbeats WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC`,
                     [start, end],
-                    (err, rows: any[]) => {
-                        if (err) {
-                            reject(err);
-                            return;
-                        }
+                    async (err, rows: any[]) => {
+                        try {
+                            if (err) {
+                                reject(err);
+                                return;
+                            }
 
-                        if (rows.length === 0) {
+                            if (rows.length === 0) {
+                                resolve({
+                                    dateKey,
+                                    sessionCount: 0,
+                                    totalTimeMs: 0,
+                                    sessions: [],
+                                    totalCodingMs: 0,
+                                    totalPlanningMs: 0
+                                });
+                                return;
+                            }
+
+                            const sessions = computeSessionsFromHeartbeats(rows);
+                            const totalCodingMs = sessions.reduce((sum, s) => sum + s.codingMs, 0);
+                            const totalPlanningMs = sessions.reduce((sum, s) => sum + s.planningMs, 0);
+                            const totalTimeMs = totalCodingMs + totalPlanningMs;
+                            const lastHeartbeatId = rows[rows.length - 1].id;
+                            const previousTotalMs = (await getDailyCacheTotal(db, dateKey)) ?? 0;
+
+                            await new Promise<void>((resolve, reject) => {
+                                db.run(
+                                    `INSERT OR REPLACE INTO daily_sessions_cache (date_key, session_count, total_time_ms, sessions_json, last_heartbeat_id, computed_at) VALUES (?, ?, ?, ?, ?, ?)`,
+                                    [dateKey, sessions.length, totalTimeMs, JSON.stringify(sessions), lastHeartbeatId, Date.now()],
+                                    (err) => err ? reject(err) : resolve()
+                                );
+                            });
+                            await updateAggregateCachesForDate(db, dateKey, previousTotalMs, totalTimeMs);
+
                             resolve({
                                 dateKey,
-                                sessionCount: 0,
-                                totalTimeMs: 0,
-                                sessions: [],
-                                totalCodingMs: 0,
-                                totalPlanningMs: 0
+                                sessionCount: sessions.length,
+                                totalTimeMs,
+                                sessions,
+                                totalCodingMs,
+                                totalPlanningMs
                             });
-                            return;
+                        } catch (error) {
+                            reject(error);
                         }
-
-                        const sessions = computeSessionsFromHeartbeats(rows);
-                        const totalCodingMs = sessions.reduce((sum, s) => sum + s.codingMs, 0);
-                        const totalPlanningMs = sessions.reduce((sum, s) => sum + s.planningMs, 0);
-                        const totalTimeMs = totalCodingMs + totalPlanningMs;
-                        const lastHeartbeatId = rows[rows.length - 1].id;
-
-                        db.run(
-                            `INSERT OR REPLACE INTO daily_sessions_cache (date_key, session_count, total_time_ms, sessions_json, last_heartbeat_id, computed_at) VALUES (?, ?, ?, ?, ?, ?)`,
-                            [dateKey, sessions.length, totalTimeMs, JSON.stringify(sessions), lastHeartbeatId, Date.now()]
-                        );
-
-                        resolve({
-                            dateKey,
-                            sessionCount: sessions.length,
-                            totalTimeMs,
-                            sessions,
-                            totalCodingMs,
-                            totalPlanningMs
-                        });
                     }
                 );
             }
@@ -721,6 +954,7 @@ export function recalculateAllCachedDays(db: sqlite3.Database): Promise<number> 
                         const totalTimeMs = totalCodingMs + totalPlanningMs;
                         const lastHeartbeatId = heartbeats[heartbeats.length - 1].id;
 
+                        const previousTotalMs = (await getDailyCacheTotal(db, dateKey)) ?? 0;
                         await new Promise<void>((resolve, reject) => {
                             db.run(
                                 `INSERT OR REPLACE INTO daily_sessions_cache (date_key, session_count, total_time_ms, sessions_json, last_heartbeat_id, computed_at) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -728,6 +962,7 @@ export function recalculateAllCachedDays(db: sqlite3.Database): Promise<number> 
                                 (err) => err ? reject(err) : resolve()
                             );
                         });
+                        await updateAggregateCachesForDate(db, dateKey, previousTotalMs, totalTimeMs);
                         recalculated++;
                     }
                 }

@@ -20,6 +20,10 @@ if [ -z "$VSIX_FILE" ]; then
 fi
 
 echo "📥 Installing extension: $VSIX_FILE"
-code --install-extension "$VSIX_FILE" --force
+if command -v cursor &> /dev/null; then
+    cursor --install-extension "$VSIX_FILE" --force
+else
+    code --install-extension "$VSIX_FILE" --force
+fi
 
 echo "✅ Extension installed successfully!"

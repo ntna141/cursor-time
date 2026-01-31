@@ -43,7 +43,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    sessionsPanel = new SessionsPanelProvider(dbInstance, todayStore);
+    sessionsPanel = new SessionsPanelProvider(context, dbInstance, todayStore);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(
             SessionsPanelProvider.viewType,

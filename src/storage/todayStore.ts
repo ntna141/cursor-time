@@ -1,5 +1,5 @@
 import sqlite3 from 'sqlite3';
-import { Heartbeat, Session, DaySessionSummary, getTodayDateKey, getDateRange, ActivitySegment } from './index';
+import { Heartbeat, Session, DaySessionSummary, getTodayDateKey, getDateRange, ActivitySegment, updateAggregateCachesForDate } from './index';
 import { SESSION_GAP_THRESHOLD_MS, PLANNING_STREAK_THRESHOLD } from '../utils/time';
 
 interface ActiveSession {
@@ -95,12 +95,29 @@ export class TodaySessionStore {
 
         const totalTimeMs = allSessions.reduce((sum, s) => sum + s.durationMs, 0);
         
+        const previousTotalPromise = new Promise<number>((resolve) => {
+            this.db.get(
+                `SELECT total_time_ms FROM daily_sessions_cache WHERE date_key = ?`,
+                [previousState.dateKey],
+                (err, row: any) => {
+                    if (err) {
+                        resolve(0);
+                    } else {
+                        resolve(row ? row.total_time_ms : 0);
+                    }
+                }
+            );
+        });
+
         this.db.run(
             `INSERT OR REPLACE INTO daily_sessions_cache (date_key, session_count, total_time_ms, sessions_json, last_heartbeat_id, computed_at) VALUES (?, ?, ?, ?, ?, ?)`,
             [previousState.dateKey, allSessions.length, totalTimeMs, JSON.stringify(allSessions), null, Date.now()],
-            (err) => {
+            async (err) => {
                 if (err) {
                     console.error('Failed to cache previous day:', err);
+                } else {
+                    const previousTotalMs = await previousTotalPromise;
+                    await updateAggregateCachesForDate(this.db, previousState.dateKey, previousTotalMs, totalTimeMs);
                 }
             }
         );
