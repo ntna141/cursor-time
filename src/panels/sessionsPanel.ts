@@ -54,6 +54,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     private webviewReady: boolean = false;
     private lastRenderedSections?: { dateKey: string; summaryHeader: string; panelSwitcher: string; todosSection: string };
     private lastRenderState?: { summary: DaySessionSummary; todos: TodoItem[]; stats: StatsSummary; isToday: boolean };
+    private theme: 'dark' | 'blue' = 'dark';
 
     constructor(context: vscode.ExtensionContext, db: sqlite3.Database, todayStore: TodaySessionStore) {
         this.context = context;
@@ -61,6 +62,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         this.todayStore = todayStore;
         this.currentDateKey = getTodayDateKey();
         this.todoHandler = new TodoHandler(db);
+        this.theme = (context.globalState.get('theme') as 'dark' | 'blue') || 'dark';
         
         vscode.window.onDidChangeWindowState(async (state) => {
             if (state.focused && this._view?.visible) {
@@ -143,6 +145,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         webviewView.webview.onDidReceiveMessage(async (message) => {
             if (message.command === 'webviewReady') {
                 this.webviewReady = true;
+                this._view?.webview.postMessage({ command: 'updateTheme', theme: this.theme });
                 return;
             }
             if (message.command === 'prevDay' || message.command === 'nextDay') {
@@ -168,6 +171,12 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                 this.updatePanelVisibility();
             } else if (message.command === 'openKeybindings') {
                 await vscode.commands.executeCommand('workbench.action.openGlobalKeybindings');
+            } else if (message.command === 'setTheme') {
+                this.theme = message.theme === 'blue' ? 'blue' : 'dark';
+                await this.context.globalState.update('theme', this.theme);
+                if (this._view) {
+                    this._view.webview.postMessage({ command: 'updateTheme', theme: this.theme });
+                }
             } else if (message.command === 'prevDay') {
                 this.currentDateKey = this.getOffsetDateKey(this.currentDateKey, -1);
                 this.viewingToday = false;
@@ -186,6 +195,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
 
     private getLoadingHtml(webview: vscode.Webview): string {
         const stylesUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'sessionsPanel.css'));
+        const themeAttr = this.theme === 'blue' ? 'blue' : '';
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -193,7 +203,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="${stylesUri}">
 </head>
-<body>
+<body${themeAttr ? ` data-theme="${themeAttr}"` : ''}>
     <div class="loading">loading...</div>
 </body>
 </html>`;
@@ -496,6 +506,9 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                 <div class="settings-section">
                     <button class="settings-action" id="openKeybindingsBtn">change keybinds</button>
                 </div>
+                <div class="settings-section">
+                    <button class="settings-action" id="toggleThemeBtn">theme: ${this.theme === 'dark' ? 'dark' : 'blue'}</button>
+                </div>
             </div>
         </div>
     </div>
@@ -529,6 +542,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     private getHtml(webview: vscode.Webview, summary: DaySessionSummary, todos: TodoItem[], stats: StatsSummary, isToday: boolean, shouldFocusTodoInput: boolean = false, activePanel: 'sessions' | 'settings' | 'stats' = 'sessions'): string {
         const stylesUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'sessionsPanel.css'));
         const sections = this.getAppSections(summary, todos, stats, isToday, activePanel);
+        const themeAttr = this.theme === 'blue' ? 'blue' : '';
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -536,7 +550,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="${stylesUri}">
 </head>
-<body>
+<body${themeAttr ? ` data-theme="${themeAttr}"` : ''}>
     <div id="app">
         <div id="summaryHeaderContainer">${sections.summaryHeader}</div>
         <div id="panelSwitcherContainer">${sections.panelSwitcher}</div>
@@ -602,6 +616,15 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             if (openKeybindingsBtn) {
                 bindOnce(openKeybindingsBtn, 'OpenKeybindingsClick', 'click', () => {
                     vscode.postMessage({ command: 'openKeybindings' });
+                });
+            }
+            
+            const toggleThemeBtn = document.getElementById('toggleThemeBtn');
+            if (toggleThemeBtn) {
+                bindOnce(toggleThemeBtn, 'ToggleThemeClick', 'click', () => {
+                    const currentTheme = document.body.getAttribute('data-theme') || 'dark';
+                    const newTheme = currentTheme === 'dark' ? 'blue' : 'dark';
+                    vscode.postMessage({ command: 'setTheme', theme: newTheme });
                 });
             }
 
@@ -795,6 +818,12 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                 const input = document.getElementById('todoInput');
                 if (input) {
                     input.focus();
+                }
+            } else if (message.command === 'updateTheme') {
+                document.body.setAttribute('data-theme', message.theme || 'dark');
+                const toggleThemeBtn = document.getElementById('toggleThemeBtn');
+                if (toggleThemeBtn) {
+                    toggleThemeBtn.textContent = 'theme: ' + (message.theme === 'dark' ? 'dark' : 'blue');
                 }
             } else if (message.command === 'setActivePanel') {
                 setActivePanel(message.activePanel || 'sessions');
