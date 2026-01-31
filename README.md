@@ -1,6 +1,8 @@
-# cursor-time
+# CursorTime
 
-**[CursorTime](https://marketplace.visualstudio.com/items?itemName=ngwx-dev.cursor-time)** - A fully local and open source time tracking extension for Cursor IDE that automatically tracks your coding sessions, distinguishes between coding and AI-assisted planning time, and includes a built-in todo list. Incomplete todos automatically carry over to the next day, so you can seamlessly continue your work.
+**[VSCode Marketplace](https://marketplace.visualstudio.com/items?itemName=ngwx-dev.cursor-time)**
+
+A fully local and open source time tracking extension for Cursor IDE that automatically tracks your coding sessions, distinguishes between coding and AI-assisted planning time, and includes a built-in todo list. Incomplete todos automatically carry over to the next day, so you can seamlessly continue your work.
 
 <table>
 <tr>
