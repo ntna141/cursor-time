@@ -3,6 +3,7 @@
   "displayName": "cursor-time",
   "description": "",
   "version": "0.0.1",
+  "publisher": "ngwx-dev",
   "repository": {
     "type": "git",
     "url": "https://github.com/ntna141/ntna-time.git"
@@ -10,6 +11,7 @@
   "engines": {
     "vscode": "^1.74.0"
   },
+  "icon": "media/icon.png",
   "categories": [
     "Other"
   ],
