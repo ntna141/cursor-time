@@ -69,7 +69,7 @@ export function createDirectory(dir: string) {
 
 export function createDatabase(dir: string): Promise<sqlite3.Database> {
     return new Promise((resolve, reject) => {
-        const dbPath = path.join(dir, 'ntna-time.db');
+        const dbPath = path.join(dir, 'cursor-time.db');
         const db = new sqlite3.Database(dbPath, (err) => {
             if (err) {
                 reject(err);

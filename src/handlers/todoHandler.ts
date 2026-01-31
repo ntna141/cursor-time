@@ -43,6 +43,12 @@ export class TodoHandler {
                     getUnfinishedTodosBeforeDate(this.db, dateKey)
                 ]);
                 const todos = [...carriedOverTodos, ...todayTodos];
+                todos.sort((a, b) => {
+                    if (a.sortOrder !== b.sortOrder) {
+                        return a.sortOrder - b.sortOrder;
+                    }
+                    return a.createdAt - b.createdAt;
+                });
                 this.cache.set(dateKey, todos);
             } else {
                 const todos = await getCompletedTodosByDate(this.db, dateKey);
@@ -56,16 +62,19 @@ export class TodoHandler {
         const todos = await this.getTodos(dateKey);
 
         if (message.command === 'addTodo') {
-            const maxSortOrder = todos.length > 0 ? Math.max(...todos.map(t => t.sortOrder)) : -1;
+            todos.forEach(todo => {
+                todo.sortOrder += 1;
+                this.pendingChanges.set(`reorder-${todo.id}`, { type: 'reorder', id: todo.id, sortOrder: todo.sortOrder });
+            });
             const todo: TodoItem = {
                 id: this.generateId(),
                 dateKey: dateKey,
                 text: message.text!,
                 completed: false,
                 createdAt: Date.now(),
-                sortOrder: maxSortOrder + 1
+                sortOrder: 0
             };
-            todos.push(todo);
+            todos.unshift(todo);
             this.pendingChanges.set(todo.id, { type: 'insert', todo });
             this.schedulePersist();
             return true;
@@ -107,18 +116,9 @@ export class TodoHandler {
         } else if (message.command === 'editTodo') {
             const todo = todos.find(t => t.id === message.id);
             if (todo && message.text !== undefined) {
-                if (message.text.trim() === '') {
-                    const index = todos.findIndex(t => t.id === message.id);
-                    if (index !== -1) {
-                        todos.splice(index, 1);
-                        this.pendingChanges.set(message.id!, { type: 'delete', id: message.id });
-                        this.schedulePersist();
-                    }
-                } else {
-                    todo.text = message.text;
-                    this.pendingChanges.set(todo.id, { type: 'edit', id: todo.id, text: message.text });
-                    this.schedulePersist();
-                }
+                todo.text = message.text;
+                this.pendingChanges.set(todo.id, { type: 'edit', id: todo.id, text: message.text });
+                this.schedulePersist();
             }
             return true;
         }

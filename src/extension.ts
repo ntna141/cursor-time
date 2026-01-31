@@ -15,15 +15,15 @@ let sessionsPanel: SessionsPanelProvider | null = null;
 let todayStore: TodaySessionStore | null = null;
 
 export async function activate(context: vscode.ExtensionContext) {
-    console.log('EXTENSION: "ntna-time" is now active!');
+    console.log('EXTENSION: "cursor-time" is now active!');
     const dbPath = context.globalStorageUri.fsPath;
     createDirectory(dbPath);
 
     dbInstance = await createDatabase(dbPath);
-    todayStore = new TodaySessionStore(dbInstance);
     
-    const outputChannel = vscode.window.createOutputChannel('ntna-time');
+    const outputChannel = vscode.window.createOutputChannel('cursor-time');
     context.subscriptions.push(outputChannel);
+    todayStore = new TodaySessionStore(dbInstance);
 
     aggregator = new HeartbeatAggregator(dbInstance, outputChannel, todayStore);
     
@@ -106,7 +106,7 @@ export async function activate(context: vscode.ExtensionContext) {
         updateStatusBar(summary);
     });
 
-    const showHeartbeatsCommand = vscode.commands.registerCommand('ntna-time.showHeartbeats', async () => {
+    const showHeartbeatsCommand = vscode.commands.registerCommand('cursor-time.showHeartbeats', async () => {
         if (!dbInstance) {
             vscode.window.showErrorMessage('Database not initialized');
             return;
@@ -170,6 +170,19 @@ export async function activate(context: vscode.ExtensionContext) {
     });
 
     context.subscriptions.push(showHeartbeatsCommand);
+
+    const openPanelCommand = vscode.commands.registerCommand('cursor-time.openPanel', async () => {
+        await vscode.commands.executeCommand('cursor-time.sessionsView.focus');
+    });
+    context.subscriptions.push(openPanelCommand);
+
+    const newTodoCommand = vscode.commands.registerCommand('cursor-time.newTodo', async () => {
+        await vscode.commands.executeCommand('workbench.view.extension.cursor-time');
+        await vscode.commands.executeCommand('cursor-time.sessionsView.focus');
+        await new Promise(resolve => setTimeout(resolve, 50));
+        await sessionsPanel?.focusTodoInput();
+    });
+    context.subscriptions.push(newTodoCommand);
 }
 
 export async function deactivate() {

@@ -1,6 +1,6 @@
 {
-  "name": "ntna-time",
-  "displayName": "ntna-time",
+  "name": "cursor-time",
+  "displayName": "cursor-time",
   "description": "",
   "version": "0.0.1",
   "repository": {
@@ -21,26 +21,52 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "ntna-time",
-          "title": "ntna-time",
+          "id": "cursor-time",
+          "title": "cursor-time",
           "icon": "$(clock)"
         }
       ]
     },
     "views": {
-      "ntna-time": [
+      "cursor-time": [
         {
           "type": "webview",
-          "id": "ntna-time.sessionsView",
-          "name": "Sessions"
+          "id": "cursor-time.sessionsView",
+          "name": "cursor-time"
         }
       ]
     },
     "commands": [
       {
-        "command": "ntna-time.showHeartbeats",
+        "command": "cursor-time.showHeartbeats",
         "title": "Show Recent Heartbeats",
-        "category": "ntna-time"
+        "category": "cursor-time"
+      },
+      {
+        "command": "cursor-time.openPanel",
+        "title": "Open Panel",
+        "category": "cursor-time"
+      },
+      {
+        "command": "cursor-time.newTodo",
+        "title": "New Todo",
+        "category": "cursor-time"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "cursor-time.openPanel",
+        "key": "cmd+shift+i",
+        "mac": "cmd+shift+i",
+        "win": "ctrl+shift+i",
+        "linux": "ctrl+shift+i"
+      },
+      {
+        "command": "cursor-time.newTodo",
+        "key": "cmd+u",
+        "mac": "cmd+u",
+        "win": "ctrl+u",
+        "linux": "ctrl+u"
       }
     ]
   },
