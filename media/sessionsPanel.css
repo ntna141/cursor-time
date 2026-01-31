@@ -1,3 +1,23 @@
+html, body, #app {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+#app::-webkit-scrollbar {
+    display: none;
+}
+
+* {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+    display: none;
+}
+
 body {
     font-family: monospace;
     padding: 15px;
@@ -82,15 +102,16 @@ body > * {
 
 .stats-row {
     display: flex;
-    align-items: baseline;
-    gap: 12px;
+    flex-direction: column;
+    align-items: center;
+    gap: 7px;
 }
 
 .total-time {
-    font-size: 28px;
+    font-size: 34px;
     font-weight: bold;
     color: #7aa2f7;
-    margin-top: 3px;
+    word-spacing: -0.2em;
 }
 
 .session-count {
@@ -164,7 +185,7 @@ body > * {
 
 .hour-marker {
     position: absolute;
-    top: 14px;
+    top: 16px;
     width: 1px;
     height: 6px;
     background: #414868;
@@ -173,7 +194,7 @@ body > * {
 
 .hour-label {
     position: absolute;
-    top: 8px;
+    top: 10px;
     left: 50%;
     transform: translateX(-50%);
     font-size: 8px;

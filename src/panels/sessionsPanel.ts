@@ -52,6 +52,8 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     private todoHandler: TodoHandler;
     private activePanel: 'sessions' | 'settings' | 'stats' = 'sessions';
     private webviewReady: boolean = false;
+    private lastRenderedSections?: { dateKey: string; summaryHeader: string; panelSwitcher: string; todosSection: string };
+    private lastRenderState?: { summary: DaySessionSummary; todos: TodoItem[]; stats: StatsSummary; isToday: boolean };
 
     constructor(context: vscode.ExtensionContext, db: sqlite3.Database, todayStore: TodaySessionStore) {
         this.context = context;
@@ -77,8 +79,17 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         
         if (this._view) {
             if (this.webviewReady) {
-                const appHtml = this.getAppHtml(summary, todos, stats, true, this.activePanel);
-                this._view.webview.postMessage({ command: 'updateContent', html: appHtml, shouldFocusTodoInput: false, activePanel: this.activePanel });
+                const sections = this.getAppSections(summary, todos, stats, true, this.activePanel);
+                this._view.webview.postMessage({
+                    command: 'updateSections',
+                    summaryHeader: sections.summaryHeader,
+                    panelSwitcher: sections.panelSwitcher,
+                    todosSection: sections.todosSection,
+                    shouldFocusTodoInput: false,
+                    activePanel: this.activePanel
+                });
+                this.lastRenderedSections = { ...sections, dateKey: todayKey };
+                this.lastRenderState = { summary, todos, stats, isToday: true };
             } else {
                 this._view.webview.html = this.getHtml(this._view.webview, summary, todos, stats, true, false, this.activePanel);
             }
@@ -89,6 +100,12 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         const todayKey = getTodayDateKey();
         if (this._view && this._view.visible && this.currentDateKey === todayKey) {
             this.updateView(false, summary);
+        } else if (this._view && this._view.visible && this.viewingToday) {
+            this.ensureTodayUpdated().then((didChange) => {
+                if (didChange) {
+                    this.updateView();
+                }
+            });
         }
     }
 
@@ -189,14 +206,22 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     }
 
-    private async ensureTodayUpdated(): Promise<void> {
+    private async ensureTodayUpdated(): Promise<boolean> {
         if (this.viewingToday) {
             const actualToday = getTodayDateKey();
             if (this.currentDateKey !== actualToday) {
+                const previousDateKey = this.currentDateKey;
                 this.currentDateKey = actualToday;
+                this.viewingToday = true;
                 await this.todayStore.load();
+                this.todoHandler.invalidateCache(previousDateKey);
+                this.todoHandler.invalidateCache(actualToday);
+                this.cache.delete(previousDateKey);
+                this.cache.delete(actualToday);
+                return true;
             }
         }
+        return false;
     }
 
     public async updateView(shouldFocusTodoInput: boolean = false, precomputedSummary?: DaySessionSummary) {
@@ -209,8 +234,17 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             if (cached && !shouldFocusTodoInput) {
                 const stats = await getStatsSummary(this.db);
                 if (this.webviewReady) {
-                    const appHtml = this.getAppHtml(cached.summary, cached.todos, stats, isToday, this.activePanel);
-                    this._view.webview.postMessage({ command: 'updateContent', html: appHtml, shouldFocusTodoInput: false, activePanel: this.activePanel });
+                    const sections = this.getAppSections(cached.summary, cached.todos, stats, isToday, this.activePanel);
+                    this._view.webview.postMessage({
+                        command: 'updateSections',
+                        summaryHeader: sections.summaryHeader,
+                        panelSwitcher: sections.panelSwitcher,
+                        todosSection: sections.todosSection,
+                        shouldFocusTodoInput: false,
+                        activePanel: this.activePanel
+                    });
+                    this.lastRenderedSections = { ...sections, dateKey: this.currentDateKey };
+                    this.lastRenderState = { summary: cached.summary, todos: cached.todos, stats, isToday };
                 } else {
                     this._view.webview.html = this.getHtml(this._view.webview, cached.summary, cached.todos, stats, isToday, false, this.activePanel);
                 }
@@ -228,23 +262,45 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             this.cache.set(this.currentDateKey, { summary, todos });
         }
 
+        const sections = this.getAppSections(summary, todos, stats, isToday, this.activePanel);
+        this.lastRenderState = { summary, todos, stats, isToday };
+
         if (this.webviewReady) {
-            const appHtml = this.getAppHtml(summary, todos, stats, isToday, this.activePanel);
-            this._view.webview.postMessage({ command: 'updateContent', html: appHtml, shouldFocusTodoInput, activePanel: this.activePanel });
+            const lastRendered = this.lastRenderedSections;
+            const shouldReplaceAll = !lastRendered || lastRendered.dateKey !== this.currentDateKey;
+            const summaryChanged = shouldReplaceAll || (lastRendered && lastRendered.summaryHeader !== sections.summaryHeader);
+            const panelChanged = shouldReplaceAll || (lastRendered && lastRendered.panelSwitcher !== sections.panelSwitcher);
+            const todosChanged = shouldReplaceAll || (lastRendered && lastRendered.todosSection !== sections.todosSection);
+
+            if (summaryChanged || panelChanged || todosChanged) {
+                this._view.webview.postMessage({
+                    command: 'updateSections',
+                    summaryHeader: summaryChanged ? sections.summaryHeader : undefined,
+                    panelSwitcher: panelChanged ? sections.panelSwitcher : undefined,
+                    todosSection: todosChanged ? sections.todosSection : undefined,
+                    shouldFocusTodoInput,
+                    activePanel: this.activePanel
+                });
+                this.lastRenderedSections = { ...sections, dateKey: this.currentDateKey };
+            }
+            if (shouldFocusTodoInput) {
+                this._view.webview.postMessage({ command: 'focusTodoInput' });
+            }
         } else {
             this._view.webview.html = this.getHtml(this._view.webview, summary, todos, stats, isToday, shouldFocusTodoInput, this.activePanel);
+            this.lastRenderedSections = { ...sections, dateKey: this.currentDateKey };
         }
     }
 
     public async focusTodoInput(): Promise<void> {
         if (!this._view) return;
-        this.activePanel = 'sessions';
         await this.updateView(true);
     }
 
     private updatePanelVisibility(): void {
         if (!this._view) return;
         this._view.webview.postMessage({ command: 'setActivePanel', activePanel: this.activePanel });
+        this.syncLastRenderedForActivePanel();
     }
 
 
@@ -358,7 +414,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         `;
     }
 
-    private getAppHtml(summary: DaySessionSummary, todos: TodoItem[], stats: StatsSummary, isToday: boolean, activePanel: 'sessions' | 'settings' | 'stats' = 'sessions'): string {
+    private getAppSections(summary: DaySessionSummary, todos: TodoItem[], stats: StatsSummary, isToday: boolean, activePanel: 'sessions' | 'settings' | 'stats' = 'sessions'): { summaryHeader: string; panelSwitcher: string; todosSection: string } {
         const filteredSessions = summary.sessions.filter(s => s.durationMs >= 60000);
         const timelineHtml = this.getTimelineHtml(summary.sessions);
         const todosHtml = todos.map((todo, index) => `
@@ -369,7 +425,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             </div>
         `).join('');
 
-        return `
+        const summaryHeader = `
     <div class="summary-header">
         <div class="date-nav">
             <button class="nav-btn" id="prevBtn">&larr;</button>
@@ -382,10 +438,13 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         </div>
         <div class="settings-row">
             <button class="settings-btn ${activePanel === 'sessions' ? 'disabled' : ''}" id="sessionsBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg></button>
-            <button class="settings-btn ${activePanel === 'stats' ? 'disabled' : ''}" id="statsBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"></path><path d="M7 19V9"></path><path d="M12 19V5"></path><path d="M17 19v-7"></path></svg></button>
+            <button class="settings-btn ${activePanel === 'stats' ? 'disabled' : ''}" id="statsBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg></button>
             <button class="settings-btn ${activePanel === 'settings' ? 'disabled' : ''}" id="settingsBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button>
         </div>
     </div>
+        `;
+
+        const panelSwitcher = `
     <div class="panel-switcher">
         <div class="panel sessions-panel ${activePanel === 'sessions' ? 'visible' : 'hidden'}">
             <h2 class="section-header">sessions</h2>
@@ -440,6 +499,9 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             </div>
         </div>
     </div>
+        `;
+
+        const todosSection = `
     <h2 class="section-header" style="margin-top: 20px;">${isToday ? 'todos' : 'completed'}</h2>
     <div class="todos-list">
         ${isToday ? `
@@ -451,11 +513,22 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         ${todosHtml}
     </div>
         `;
+
+        return { summaryHeader, panelSwitcher, todosSection };
+    }
+
+    private getAppHtml(summary: DaySessionSummary, todos: TodoItem[], stats: StatsSummary, isToday: boolean, activePanel: 'sessions' | 'settings' | 'stats' = 'sessions'): string {
+        const sections = this.getAppSections(summary, todos, stats, isToday, activePanel);
+        return `
+    ${sections.summaryHeader}
+    ${sections.panelSwitcher}
+    ${sections.todosSection}
+        `;
     }
 
     private getHtml(webview: vscode.Webview, summary: DaySessionSummary, todos: TodoItem[], stats: StatsSummary, isToday: boolean, shouldFocusTodoInput: boolean = false, activePanel: 'sessions' | 'settings' | 'stats' = 'sessions'): string {
         const stylesUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'sessionsPanel.css'));
-        const appHtml = this.getAppHtml(summary, todos, stats, isToday, activePanel);
+        const sections = this.getAppSections(summary, todos, stats, isToday, activePanel);
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -464,7 +537,11 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     <link rel="stylesheet" href="${stylesUri}">
 </head>
 <body>
-    <div id="app">${appHtml}</div>
+    <div id="app">
+        <div id="summaryHeaderContainer">${sections.summaryHeader}</div>
+        <div id="panelSwitcherContainer">${sections.panelSwitcher}</div>
+        <div id="todosSectionContainer">${sections.todosSection}</div>
+    </div>
     <script>
         const vscode = acquireVsCodeApi();
         const app = document.getElementById('app');
@@ -478,16 +555,27 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         let updatePanelHeight = () => {};
         let setActivePanel = () => {};
 
+        let documentHandlersBound = false;
+        const bindOnce = (el, key, eventName, handler) => {
+            if (!el) return;
+            const flag = 'bound' + key;
+            if (el.dataset && el.dataset[flag]) return;
+            if (el.dataset) {
+                el.dataset[flag] = 'true';
+            }
+            el.addEventListener(eventName, handler);
+        };
+
         const bindHandlers = (shouldFocusTodoInput) => {
             const prevBtn = document.getElementById('prevBtn');
             const nextBtn = document.getElementById('nextBtn');
             if (prevBtn) {
-                prevBtn.addEventListener('click', () => {
+                bindOnce(prevBtn, 'PrevClick', 'click', () => {
                     vscode.postMessage({ command: 'prevDay' });
                 });
             }
             if (nextBtn) {
-                nextBtn.addEventListener('click', () => {
+                bindOnce(nextBtn, 'NextClick', 'click', () => {
                     vscode.postMessage({ command: 'nextDay' });
                 });
             }
@@ -495,24 +583,24 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             sessionsBtn = document.getElementById('sessionsBtn');
             statsBtn = document.getElementById('statsBtn');
             if (settingsBtn) {
-                settingsBtn.addEventListener('click', () => {
+                bindOnce(settingsBtn, 'SettingsClick', 'click', () => {
                     vscode.postMessage({ command: 'showSettings' });
                 });
             }
             if (sessionsBtn) {
-                sessionsBtn.addEventListener('click', () => {
+                bindOnce(sessionsBtn, 'SessionsClick', 'click', () => {
                     vscode.postMessage({ command: 'showSessions' });
                 });
             }
             if (statsBtn) {
-                statsBtn.addEventListener('click', () => {
+                bindOnce(statsBtn, 'StatsClick', 'click', () => {
                     vscode.postMessage({ command: 'showStats' });
                 });
             }
             
             const openKeybindingsBtn = document.getElementById('openKeybindingsBtn');
             if (openKeybindingsBtn) {
-                openKeybindingsBtn.addEventListener('click', () => {
+                bindOnce(openKeybindingsBtn, 'OpenKeybindingsClick', 'click', () => {
                     vscode.postMessage({ command: 'openKeybindings' });
                 });
             }
@@ -563,22 +651,28 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                         todoInput.value = '';
                     }
                 };
-                todoInput.addEventListener('keypress', (e) => {
+                bindOnce(todoInput, 'TodoInputKeypress', 'keypress', (e) => {
                     if (e.key === 'Enter') {
                         submitTodo();
                     }
                 });
-                todoInput.addEventListener('blur', submitTodo);
+                bindOnce(todoInput, 'TodoInputBlur', 'blur', submitTodo);
             }
 
             document.querySelectorAll('.todo-checkbox').forEach(checkbox => {
-                checkbox.addEventListener('change', (e) => {
+                bindOnce(checkbox, 'TodoCheckboxChange', 'change', (e) => {
                     const id = e.target.dataset.id;
                     vscode.postMessage({ command: 'toggleTodo', id, completed: e.target.checked });
                 });
             });
             
             document.querySelectorAll('.todo-text[contenteditable="true"]').forEach(span => {
+                if (span.dataset && span.dataset.boundTodoText === 'true') {
+                    return;
+                }
+                if (span.dataset) {
+                    span.dataset.boundTodoText = 'true';
+                }
                 let originalText = span.textContent;
                 let skipNextBlur = false;
                 
@@ -626,7 +720,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             let draggedIndex = -1;
             
             document.querySelectorAll('.drag-handle').forEach(handle => {
-                handle.addEventListener('mousedown', (e) => {
+                bindOnce(handle, 'DragHandleMousedown', 'mousedown', (e) => {
                     const item = handle.closest('.todo-item');
                     if (item) {
                         item.setAttribute('draggable', 'true');
@@ -634,14 +728,17 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                 });
             });
             
-            document.addEventListener('mouseup', () => {
-                document.querySelectorAll('.todo-item[draggable="true"]').forEach(item => {
-                    item.removeAttribute('draggable');
+            if (!documentHandlersBound) {
+                documentHandlersBound = true;
+                document.addEventListener('mouseup', () => {
+                    document.querySelectorAll('.todo-item[draggable="true"]').forEach(item => {
+                        item.removeAttribute('draggable');
+                    });
                 });
-            });
+            }
             
             document.querySelectorAll('.todo-item[data-index]').forEach(item => {
-                item.addEventListener('dragstart', (e) => {
+                bindOnce(item, 'TodoItemDragstart', 'dragstart', (e) => {
                     draggedItem = item;
                     draggedIndex = parseInt(item.dataset.index);
                     item.classList.add('dragging');
@@ -649,7 +746,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                     e.dataTransfer.setData('text/plain', draggedIndex);
                 });
                 
-                item.addEventListener('dragend', () => {
+                bindOnce(item, 'TodoItemDragend', 'dragend', () => {
                     item.classList.remove('dragging');
                     item.removeAttribute('draggable');
                     document.querySelectorAll('.todo-item').forEach(i => {
@@ -659,7 +756,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                     draggedIndex = -1;
                 });
                 
-                item.addEventListener('dragover', (e) => {
+                bindOnce(item, 'TodoItemDragover', 'dragover', (e) => {
                     e.preventDefault();
                     e.dataTransfer.dropEffect = 'move';
                     if (draggedItem && item !== draggedItem) {
@@ -675,11 +772,11 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                     }
                 });
                 
-                item.addEventListener('dragleave', () => {
+                bindOnce(item, 'TodoItemDragleave', 'dragleave', () => {
                     item.classList.remove('drag-over-top', 'drag-over-bottom');
                 });
                 
-                item.addEventListener('drop', (e) => {
+                bindOnce(item, 'TodoItemDrop', 'drop', (e) => {
                     e.preventDefault();
                     item.classList.remove('drag-over-top', 'drag-over-bottom');
                     if (draggedItem && item !== draggedItem) {
@@ -702,6 +799,24 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             } else if (message.command === 'setActivePanel') {
                 setActivePanel(message.activePanel || 'sessions');
                 updatePanelHeight();
+            } else if (message.command === 'updateSections') {
+                const summaryHeaderContainer = document.getElementById('summaryHeaderContainer');
+                const panelSwitcherContainer = document.getElementById('panelSwitcherContainer');
+                const todosSectionContainer = document.getElementById('todosSectionContainer');
+                if (summaryHeaderContainer && message.summaryHeader !== undefined) {
+                    summaryHeaderContainer.innerHTML = message.summaryHeader;
+                }
+                if (panelSwitcherContainer && message.panelSwitcher !== undefined) {
+                    panelSwitcherContainer.innerHTML = message.panelSwitcher;
+                }
+                if (todosSectionContainer && message.todosSection !== undefined) {
+                    todosSectionContainer.innerHTML = message.todosSection;
+                }
+                bindHandlers(!!message.shouldFocusTodoInput);
+                if (message.activePanel) {
+                    setActivePanel(message.activePanel);
+                    updatePanelHeight();
+                }
             } else if (message.command === 'updateContent') {
                 if (app) {
                     app.innerHTML = message.html || '';
@@ -721,6 +836,18 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
 </html>`;
     }
 
+    private syncLastRenderedForActivePanel(): void {
+        if (!this.lastRenderState) return;
+        const sections = this.getAppSections(
+            this.lastRenderState.summary,
+            this.lastRenderState.todos,
+            this.lastRenderState.stats,
+            this.lastRenderState.isToday,
+            this.activePanel
+        );
+        this.lastRenderedSections = { ...sections, dateKey: this.currentDateKey };
+    }
+
     private getLastActiveText(sessions: Array<{ end: number }>): string {
         if (sessions.length === 0) {
             return '';
@@ -731,9 +858,9 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         const diffMin = Math.floor(diffMs / 60000);
         
         if (diffMin < 1) {
-            return '(last seen just now)';
+            return '(active just now)';
         }
-        return `(last seen ${diffMin} min ago)`;
+        return `(active ${diffMin} min ago)`;
     }
 
     private escapeHtml(text: string): string {

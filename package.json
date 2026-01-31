@@ -23,7 +23,7 @@
         {
           "id": "cursor-time",
           "title": "cursor-time",
-          "icon": "$(clock)"
+          "icon": "media/cursor-time.svg"
         }
       ]
     },
