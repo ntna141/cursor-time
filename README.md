@@ -1,6 +1,6 @@
 # cursor-time
 
-A fully local and open source time tracking extension for Cursor IDE that automatically tracks your coding sessions, distinguishes between coding and AI-assisted planning time, and includes a built-in todo list. Incomplete todos automatically carry over to the next day, so you can seamlessly continue your work.
+**[CursorTime](https://marketplace.visualstudio.com/items?itemName=ngwx-dev.cursor-time)** - A fully local and open source time tracking extension for Cursor IDE that automatically tracks your coding sessions, distinguishes between coding and AI-assisted planning time, and includes a built-in todo list. Incomplete todos automatically carry over to the next day, so you can seamlessly continue your work.
 
 <table>
 <tr>
@@ -85,6 +85,10 @@ Access via Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`):
 - `cursor-time: Show Recent Heartbeats` - Display the last 50 heartbeats in the output channel for debugging
 
 ## Installation
+
+### From Marketplace
+
+Install **[CursorTime](https://marketplace.visualstudio.com/items?itemName=ngwx-dev.cursor-time)** directly from the VS Code Marketplace.
 
 ### From Source
 
