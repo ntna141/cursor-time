@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import sqlite3 from 'sqlite3';
-import { getDaySessions, getTodayDateKey, DaySessionSummary, TodoItem, getStatsSummary, StatsSummary } from '../storage';
+import { getDaySessions, getTodayDateKey, DaySessionSummary, TodoItem, getStatsSummary, StatsSummary, Heartbeat, insertHeartbeat, deleteHeartbeatsByDateKey, summarizeHeartbeatsForCache, upsertDailySessionsCache, updateAggregateCachesForDate } from '../storage';
 import { TodaySessionStore } from '../storage/todayStore';
 import { TodoHandler } from '../handlers/todoHandler';
 import { formatDuration } from '../utils/time';
@@ -177,6 +178,8 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                 if (this._view) {
                     this._view.webview.postMessage({ command: 'updateTheme', theme: this.theme });
                 }
+            } else if (message.command === 'importWakaTime') {
+                await this.handleImportWakaTime();
             } else if (message.command === 'prevDay') {
                 this.currentDateKey = this.getOffsetDateKey(this.currentDateKey, -1);
                 this.viewingToday = false;
@@ -214,6 +217,135 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         const date = new Date(year, month - 1, day);
         date.setDate(date.getDate() + offset);
         return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    }
+
+    private getDateKeyFromTimestamp(timestamp: number): string {
+        const date = new Date(timestamp);
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    }
+
+    private mapWakaTimeHeartbeat(raw: any): Heartbeat | null {
+        if (!raw || typeof raw !== 'object') return null;
+        const entity = typeof raw.entity === 'string' ? raw.entity : null;
+        const type = typeof raw.type === 'string' ? raw.type : null;
+        if (!entity || !type) return null;
+
+        const timeValue = typeof raw.time === 'number' ? raw.time : null;
+        const createdAtRaw = typeof raw.created_at === 'string' ? raw.created_at : null;
+        const timestamp = timeValue !== null
+            ? Math.floor(timeValue * 1000)
+            : (createdAtRaw ? Date.parse(createdAtRaw) : NaN);
+        if (!Number.isFinite(timestamp)) return null;
+
+        const created_at = createdAtRaw || new Date(timestamp).toISOString();
+        const categoryRaw = typeof raw.category === 'string' ? raw.category.toLowerCase() : 'coding';
+        const category = categoryRaw || 'coding';
+        const activity_type = category === 'coding' ? 'coding' : 'planning';
+        const dependencies = Array.isArray(raw.dependencies) ? raw.dependencies.map((dep: any) => String(dep)) : undefined;
+
+        return {
+            id: typeof raw.id === 'string' ? raw.id : `${timestamp}-${Math.random().toString(36).slice(2)}`,
+            timestamp,
+            created_at,
+            entity,
+            type,
+            category,
+            time: timeValue ?? undefined,
+            is_write: !!raw.is_write,
+            project: typeof raw.project === 'string' ? raw.project : undefined,
+            project_root_count: typeof raw.project_root_count === 'number' ? raw.project_root_count : undefined,
+            branch: typeof raw.branch === 'string' ? raw.branch : undefined,
+            language: typeof raw.language === 'string' ? raw.language : undefined,
+            dependencies,
+            machine_name_id: typeof raw.machine_name_id === 'string' ? raw.machine_name_id : undefined,
+            activity_type,
+            has_file_activity: type === 'file',
+            has_agent_activity: false,
+            source_file: undefined
+        };
+    }
+
+    private setImportLoading(loading: boolean) {
+        if (this._view) {
+            this._view.webview.postMessage({ command: 'setImportLoading', loading });
+        }
+    }
+
+    private async handleImportWakaTime(): Promise<void> {
+        try {
+            const defaultUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+            const picked = await vscode.window.showOpenDialog({
+                canSelectFiles: true,
+                canSelectFolders: false,
+                canSelectMany: false,
+                filters: { JSON: ['json'] },
+                defaultUri
+            });
+            if (!picked || picked.length === 0) {
+                return;
+            }
+
+            this.setImportLoading(true);
+            vscode.window.showWarningMessage('Importing WakaTime data. Please do not interrupt until it finishes.');
+
+            const rawText = await fs.promises.readFile(picked[0].fsPath, 'utf8');
+            const data = JSON.parse(rawText);
+            const days = Array.isArray(data?.days) ? data.days : [];
+
+            const grouped = new Map<string, Heartbeat[]>();
+            for (const day of days) {
+                const heartbeats = Array.isArray(day?.heartbeats) ? day.heartbeats : [];
+                for (const hb of heartbeats) {
+                    const mapped = this.mapWakaTimeHeartbeat(hb);
+                    if (!mapped) continue;
+                    const dateKey = this.getDateKeyFromTimestamp(mapped.timestamp);
+                    const list = grouped.get(dateKey);
+                    if (list) {
+                        list.push(mapped);
+                    } else {
+                        grouped.set(dateKey, [mapped]);
+                    }
+                }
+            }
+
+            if (grouped.size === 0) {
+                vscode.window.showErrorMessage('No heartbeats found in this file.');
+                return;
+            }
+
+            let replacedDays = 0;
+            let skippedDays = 0;
+            let inserted = 0;
+
+            for (const [dateKey, heartbeats] of grouped) {
+                const importedSummary = summarizeHeartbeatsForCache(heartbeats);
+                const existingSummary = await getDaySessions(this.db, dateKey);
+                if (importedSummary.totalCodingMs <= existingSummary.totalCodingMs) {
+                    skippedDays++;
+                    continue;
+                }
+
+                await deleteHeartbeatsByDateKey(this.db, dateKey);
+                for (const hb of heartbeats) {
+                    insertHeartbeat(this.db, hb);
+                    inserted++;
+                }
+                await upsertDailySessionsCache(this.db, dateKey, importedSummary.sessions, importedSummary.totalTimeMs, importedSummary.lastHeartbeatId);
+                await updateAggregateCachesForDate(this.db, dateKey, existingSummary.totalTimeMs, importedSummary.totalTimeMs);
+                this.cache.delete(dateKey);
+                replacedDays++;
+            }
+
+            if (replacedDays > 0) {
+                await this.updateView();
+            }
+
+            vscode.window.showInformationMessage(`Imported ${inserted} heartbeats across ${replacedDays} day(s), skipped ${skippedDays}.`);
+        } catch (error) {
+            vscode.window.showErrorMessage('Import failed.');
+        } finally {
+            this.setImportLoading(false);
+        }
     }
 
     private async ensureTodayUpdated(): Promise<boolean> {
@@ -509,6 +641,10 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                 <div class="settings-section">
                     <button class="settings-action" id="toggleThemeBtn">theme: ${this.theme === 'dark' ? 'dark' : 'blue'}</button>
                 </div>
+                <div class="settings-section">
+                    <button class="settings-action" id="importWakaTimeBtn">import wakatime</button>
+                    <span class="import-spinner" id="importSpinner" style="display: none;">⟳</span>
+                </div>
             </div>
         </div>
     </div>
@@ -625,6 +761,13 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                     const currentTheme = document.body.getAttribute('data-theme') || 'dark';
                     const newTheme = currentTheme === 'dark' ? 'blue' : 'dark';
                     vscode.postMessage({ command: 'setTheme', theme: newTheme });
+                });
+            }
+
+            const importWakaTimeBtn = document.getElementById('importWakaTimeBtn');
+            if (importWakaTimeBtn) {
+                bindOnce(importWakaTimeBtn, 'ImportWakaTimeClick', 'click', () => {
+                    vscode.postMessage({ command: 'importWakaTime' });
                 });
             }
 
@@ -824,6 +967,15 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                 const toggleThemeBtn = document.getElementById('toggleThemeBtn');
                 if (toggleThemeBtn) {
                     toggleThemeBtn.textContent = 'theme: ' + (message.theme === 'dark' ? 'dark' : 'blue');
+                }
+            } else if (message.command === 'setImportLoading') {
+                const importBtn = document.getElementById('importWakaTimeBtn');
+                const importSpinner = document.getElementById('importSpinner');
+                if (importBtn) {
+                    importBtn.disabled = message.loading || false;
+                }
+                if (importSpinner) {
+                    importSpinner.style.display = message.loading ? 'inline-block' : 'none';
                 }
             } else if (message.command === 'setActivePanel') {
                 setActivePanel(message.activePanel || 'sessions');

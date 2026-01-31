@@ -25,6 +25,48 @@ export interface Heartbeat {
     source_file?: string;
 }
 
+export function deleteHeartbeatsByDateKey(db: sqlite3.Database, dateKey: string): Promise<void> {
+    const { start, end } = getDateRange(dateKey);
+    return new Promise((resolve, reject) => {
+        db.run(
+            `DELETE FROM heartbeats WHERE timestamp BETWEEN ? AND ?`,
+            [start, end],
+            (err) => err ? reject(err) : resolve()
+        );
+    });
+}
+
+export function upsertDailySessionsCache(
+    db: sqlite3.Database,
+    dateKey: string,
+    sessions: Session[],
+    totalTimeMs: number,
+    lastHeartbeatId: string | null
+): Promise<void> {
+    return new Promise((resolve, reject) => {
+        db.run(
+            `INSERT OR REPLACE INTO daily_sessions_cache (date_key, session_count, total_time_ms, sessions_json, last_heartbeat_id, computed_at) VALUES (?, ?, ?, ?, ?, ?)`,
+            [dateKey, sessions.length, totalTimeMs, JSON.stringify(sessions), lastHeartbeatId, Date.now()],
+            (err) => err ? reject(err) : resolve()
+        );
+    });
+}
+
+export function summarizeHeartbeatsForCache(
+    heartbeats: Array<Pick<Heartbeat, 'timestamp' | 'project' | 'activity_type'> & { id?: string }>
+): { sessions: Session[]; totalCodingMs: number; totalPlanningMs: number; totalTimeMs: number; lastHeartbeatId: string | null } {
+    if (heartbeats.length === 0) {
+        return { sessions: [], totalCodingMs: 0, totalPlanningMs: 0, totalTimeMs: 0, lastHeartbeatId: null };
+    }
+    const rows = [...heartbeats].sort((a, b) => a.timestamp - b.timestamp);
+    const sessions = computeSessionsFromHeartbeats(rows);
+    const totalCodingMs = sessions.reduce((sum, s) => sum + s.codingMs, 0);
+    const totalPlanningMs = sessions.reduce((sum, s) => sum + s.planningMs, 0);
+    const totalTimeMs = totalCodingMs + totalPlanningMs;
+    const lastHeartbeatId = rows[rows.length - 1].id ?? null;
+    return { sessions, totalCodingMs, totalPlanningMs, totalTimeMs, lastHeartbeatId };
+}
+
 export interface ActivitySegment {
     start: number;
     end: number;

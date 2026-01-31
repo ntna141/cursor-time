@@ -617,3 +617,25 @@ body > * {
     outline: none;
     border-color: var(--accent-primary);
 }
+
+.settings-action:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.import-spinner {
+    display: inline-block;
+    margin-left: 8px;
+    font-size: 14px;
+    color: var(--text-main);
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
