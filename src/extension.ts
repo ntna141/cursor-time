@@ -75,15 +75,7 @@ export async function activate(context: vscode.ExtensionContext) {
             parts.push(`${formatDuration(summary.totalPlanningMs)} planning`);
         }
 
-        const lastHeartbeatTimestamp = todayStore!.getLastHeartbeatTimestamp();
-        const lastActiveSuffix = (() => {
-            if (!lastHeartbeatTimestamp) return '';
-            const diffMs = Date.now() - lastHeartbeatTimestamp;
-            if (diffMs < 0) return '';
-            const minutes = Math.floor(diffMs / 60000);
-            if (minutes <= 0) return ' (active just now)';
-            return `(active ${minutes} min${minutes === 1 ? '' : 's'} ago)`;
-        })();
+        const lastActiveSuffix = sessionsPanel?.getLastActiveSuffix(summary) ?? '';
         
         if (parts.length > 0) {
             statusBarItem.text = `$(clock) ${parts.join(' | ')}${lastActiveSuffix}`;

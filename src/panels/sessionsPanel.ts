@@ -112,6 +112,12 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    public getLastActiveSuffix(summary?: DaySessionSummary): string {
+        const summaryData = summary ?? this.todayStore.getSummary();
+        const filteredSessions = summaryData.sessions.filter(s => s.durationMs >= 60000);
+        return this.getLastActiveText(filteredSessions);
+    }
+
     public async resolveWebviewView(
         webviewView: vscode.WebviewView,
         _context: vscode.WebviewViewResolveContext,
