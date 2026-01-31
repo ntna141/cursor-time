@@ -547,10 +547,10 @@ body > * {
 }
 
 .stats-card {
-    border: 1px solid var(--accent-primary);
+    border: 1px solid #3b5656;
     border-radius: 6px;
     padding: 6px 8px;
-    background: var(--bg-stats-card);
+    background: rgba(59, 86, 86, 0.08);
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
