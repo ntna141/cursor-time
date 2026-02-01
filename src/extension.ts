@@ -90,6 +90,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     aggregator.onTick(() => {
         sessionsPanel!.refreshToday();
+        updateStatusBar();
     });
 
     aggregator.onHeartbeat(() => {

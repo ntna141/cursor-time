@@ -114,8 +114,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
 
     public getLastActiveSuffix(summary?: DaySessionSummary): string {
         const summaryData = summary ?? this.todayStore.getSummary();
-        const filteredSessions = summaryData.sessions.filter(s => s.durationMs >= 60000);
-        return this.getLastActiveText(filteredSessions);
+        return this.getLastActiveTextFromSummary(summaryData, true);
     }
 
     public async resolveWebviewView(
@@ -564,6 +563,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
 
     private getAppSections(summary: DaySessionSummary, todos: TodoItem[], stats: StatsSummary, isToday: boolean, activePanel: 'sessions' | 'settings' | 'stats' = 'sessions'): { summaryHeader: string; panelSwitcher: string; todosSection: string } {
         const filteredSessions = summary.sessions.filter(s => s.durationMs >= 60000);
+        const lastActiveText = this.getLastActiveTextFromSummary(summary, isToday);
         const timelineHtml = this.getTimelineHtml(summary.sessions);
         const todosHtml = todos.map((todo, index) => `
             <div class="todo-item ${todo.completed ? 'completed' : ''}" ${isToday ? `data-index="${index}"` : ''}>
@@ -582,7 +582,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         </div>
         <div class="stats-row">
             <span class="total-time">${formatDuration(summary.totalTimeMs)}</span>
-            <span class="session-count">${isToday ? this.getLastActiveText(filteredSessions) : `(${filteredSessions.length} session${filteredSessions.length !== 1 ? 's' : ''})`}</span>
+            <span class="session-count">${isToday ? lastActiveText : `(${filteredSessions.length} session${filteredSessions.length !== 1 ? 's' : ''})`}</span>
         </div>
         <div class="settings-row">
             <button class="settings-btn ${activePanel === 'sessions' ? 'disabled' : ''}" id="sessionsBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg></button>
@@ -1045,9 +1045,17 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         const diffMin = Math.floor(diffMs / 60000);
         
         if (diffMin < 1) {
-            return '(active just now)';
+            return ' (active just now)';
         }
-        return `(active ${diffMin} min ago)`;
+        return ` (active ${diffMin} min ago)`;
+    }
+
+    private getLastActiveTextFromSummary(summary: DaySessionSummary, isToday: boolean): string {
+        if (!isToday) {
+            return '';
+        }
+        const filteredSessions = summary.sessions.filter(s => s.durationMs >= 60000);
+        return this.getLastActiveText(filteredSessions);
     }
 
     private escapeHtml(text: string): string {
