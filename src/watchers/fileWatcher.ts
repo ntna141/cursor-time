@@ -8,6 +8,11 @@ export function setupFileWatcher(
     context: vscode.ExtensionContext
 ): ActivityEmitter {
     const emitter = new EventEmitter() as ActivityEmitter;
+    const emitIfRelevant = (uri: vscode.Uri, isWrite: boolean) => {
+        if (!shouldIgnoreFile(uri)) {
+            emitFileEvent(emitter, uri, isWrite);
+        }
+    };
 
     const watcher = vscode.workspace.createFileSystemWatcher(
         '**/*',
@@ -16,25 +21,28 @@ export function setupFileWatcher(
         false
     );
 
-    watcher.onDidCreate((uri) => {
-        if (vscode.window.state.focused && !shouldIgnoreFile(uri)) {
-            emitFileEvent(emitter, uri, false);
-        }
+    watcher.onDidCreate((uri) => emitIfRelevant(uri, false));
+
+    watcher.onDidChange((uri) => emitIfRelevant(uri, true));
+
+    watcher.onDidDelete((uri) => emitIfRelevant(uri, false));
+
+    const saveSubscription = vscode.workspace.onDidSaveTextDocument((document) => {
+        emitIfRelevant(document.uri, true);
     });
 
-    watcher.onDidChange((uri) => {
-        if (vscode.window.state.focused && !shouldIgnoreFile(uri)) {
-            emitFileEvent(emitter, uri, true);
-        }
+    const createSubscription = vscode.workspace.onDidCreateFiles((event) => {
+        event.files.forEach((uri) => emitIfRelevant(uri, false));
     });
 
-    watcher.onDidDelete((uri) => {
-        if (vscode.window.state.focused && !shouldIgnoreFile(uri)) {
-            emitFileEvent(emitter, uri, false);
-        }
+    const deleteSubscription = vscode.workspace.onDidDeleteFiles((event) => {
+        event.files.forEach((uri) => emitIfRelevant(uri, false));
     });
 
     context.subscriptions.push(watcher);
+    context.subscriptions.push(saveSubscription);
+    context.subscriptions.push(createSubscription);
+    context.subscriptions.push(deleteSubscription);
 
     return emitter;
 }
