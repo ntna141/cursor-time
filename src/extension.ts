@@ -89,14 +89,21 @@ export async function activate(context: vscode.ExtensionContext) {
     updateStatusBar();
 
     aggregator.onTick(() => {
-        sessionsPanel!.refreshToday();
-        updateStatusBar();
+        void (async () => {
+            await todayStore!.reconcileFromDatabase();
+            const summary = todayStore!.getSummary();
+            sessionsPanel!.refreshToday(summary);
+            updateStatusBar(summary);
+        })();
     });
 
     aggregator.onHeartbeat(() => {
-        const summary = todayStore!.getSummary();
-        sessionsPanel!.refreshToday(summary);
-        updateStatusBar(summary);
+        void (async () => {
+            await todayStore!.reconcileFromDatabase();
+            const summary = todayStore!.getSummary();
+            sessionsPanel!.refreshToday(summary);
+            updateStatusBar(summary);
+        })();
     });
 
     const showHeartbeatsCommand = vscode.commands.registerCommand('cursor-time.showHeartbeats', async () => {

@@ -37,7 +37,7 @@ export function setupCursorWatcher(
         outputChannel.appendLine(`[cursor-watcher] Checking: ${cursorProjectPath}`);
         
         if (fs.existsSync(cursorProjectPath)) {
-            for (const folderName of AGENT_ACTIVITY_FOLDERS) {
+            for (const folderName of getActivityFolders(cursorProjectPath)) {
                 const activityPath = path.join(cursorProjectPath, folderName);
                 if (fs.existsSync(activityPath)) {
                     outputChannel.appendLine(`[cursor-watcher] Watching: ${activityPath}`);
@@ -104,34 +104,88 @@ function watchAgentFolder(
     outputChannel: vscode.OutputChannel
 ) {
     try {
-        const watcher = fs.watch(dirPath, (eventType, filename) => {
-            if (!vscode.window.state.focused) {
-                return;
-            }
-            
-            if (!filename || !filename.endsWith('.txt')) {
-                return;
-            }
-            
-            outputChannel.appendLine(`[cursor-watcher] Agent activity: ${eventType} - ${filename}`);
-            
-            const sourceFilePath = path.join(dirPath, filename);
-            
-            const event: ActivityEvent = {
-                source: 'agent',
-                timestamp: Date.now(),
-                entity: 'cursor-agent-chat',
-                isWrite: true,
-                project: projectName,
-                language: 'agent',
-                category: 'coding',
-                sourceFile: sourceFilePath
-            };
-            
-            emitter.emit('activity', event);
+        const watcher = fs.watch(dirPath, { recursive: true }, (eventType, filename) => {
+            handleAgentActivity(dirPath, eventType, filename, emitter, projectName, outputChannel);
         });
         watchers.push(watcher);
     } catch (err) {
-        outputChannel.appendLine(`[cursor-watcher] Failed to watch: ${dirPath}`);
+        try {
+            const fallbackWatcher = fs.watch(dirPath, (eventType, filename) => {
+                handleAgentActivity(dirPath, eventType, filename, emitter, projectName, outputChannel);
+            });
+            watchers.push(fallbackWatcher);
+        } catch (fallbackErr) {
+            outputChannel.appendLine(`[cursor-watcher] Failed to watch: ${dirPath}`);
+        }
     }
+}
+
+function getActivityFolders(cursorProjectPath: string): string[] {
+    const result = new Set<string>();
+    for (const folderName of AGENT_ACTIVITY_FOLDERS) {
+        result.add(folderName);
+    }
+
+    try {
+        const entries = fs.readdirSync(cursorProjectPath, { withFileTypes: true });
+        for (const entry of entries) {
+            if (!entry.isDirectory()) {
+                continue;
+            }
+
+            if (entry.name.includes('agent') || entry.name === 'terminals') {
+                result.add(entry.name);
+            }
+        }
+    } catch (err) {
+        return Array.from(result);
+    }
+
+    return Array.from(result);
+}
+
+function shouldEmitAgentFile(dirPath: string, filename: string): boolean {
+    const sourceFilePath = path.join(dirPath, filename);
+
+    try {
+        const stat = fs.statSync(sourceFilePath);
+        return stat.isFile();
+    } catch (err) {
+        return path.extname(filename).length > 0;
+    }
+}
+
+function handleAgentActivity(
+    dirPath: string,
+    eventType: string,
+    filename: string | Buffer | null,
+    emitter: ActivityEmitter,
+    projectName: string,
+    outputChannel: vscode.OutputChannel
+) {
+    if (!vscode.window.state.focused) {
+        return;
+    }
+
+    const normalizedFilename = typeof filename === 'string' ? filename : filename?.toString();
+    if (!normalizedFilename || !shouldEmitAgentFile(dirPath, normalizedFilename)) {
+        return;
+    }
+
+    outputChannel.appendLine(`[cursor-watcher] Agent activity: ${eventType} - ${normalizedFilename}`);
+
+    const sourceFilePath = path.join(dirPath, normalizedFilename);
+
+    const event: ActivityEvent = {
+        source: 'agent',
+        timestamp: Date.now(),
+        entity: 'cursor-agent-chat',
+        isWrite: true,
+        project: projectName,
+        language: 'agent',
+        category: 'coding',
+        sourceFile: sourceFilePath
+    };
+
+    emitter.emit('activity', event);
 }

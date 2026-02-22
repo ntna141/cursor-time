@@ -149,6 +149,32 @@ export class TodaySessionStore {
         });
     }
 
+    async reconcileFromDatabase(): Promise<boolean> {
+        this.ensureCurrentDate();
+        const { start, end } = getDateRange(this.state.dateKey);
+
+        const latestTimestamp = await new Promise<number>((resolve, reject) => {
+            this.db.get(
+                `SELECT MAX(timestamp) as latest_timestamp FROM heartbeats WHERE timestamp BETWEEN ? AND ?`,
+                [start, end],
+                (err, row: any) => {
+                    if (err) {
+                        reject(err);
+                        return;
+                    }
+                    resolve(row?.latest_timestamp ?? 0);
+                }
+            );
+        });
+
+        if (latestTimestamp <= this.state.lastHeartbeatTimestamp) {
+            return false;
+        }
+
+        await this.load();
+        return true;
+    }
+
     private rebuildFromHeartbeats(rows: any[]): void {
         this.state.sessions = [];
         this.state.activeSession = null;
