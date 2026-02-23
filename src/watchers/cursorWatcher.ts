@@ -5,6 +5,7 @@ import { EventEmitter } from 'events';
 import { ActivityEvent, ActivityEmitter } from '../types';
 
 const AGENT_ACTIVITY_FOLDERS = ['agent-transcripts', 'agent-tools'];
+const AGENT_ACTIVITY_EXCLUDED_PATH_SEGMENTS = ['terminals'];
 
 export function setupCursorWatcher(
     context: vscode.ExtensionContext,
@@ -133,7 +134,7 @@ function getActivityFolders(cursorProjectPath: string): string[] {
                 continue;
             }
 
-            if (entry.name.includes('agent') || entry.name === 'terminals') {
+            if (entry.name.includes('agent')) {
                 result.add(entry.name);
             }
         }
@@ -175,6 +176,9 @@ function handleAgentActivity(
     outputChannel.appendLine(`[cursor-watcher] Agent activity: ${eventType} - ${normalizedFilename}`);
 
     const sourceFilePath = path.join(dirPath, normalizedFilename);
+    if (isExcludedAgentActivityPath(sourceFilePath)) {
+        return;
+    }
 
     const event: ActivityEvent = {
         source: 'agent',
@@ -188,4 +192,9 @@ function handleAgentActivity(
     };
 
     emitter.emit('activity', event);
+}
+
+function isExcludedAgentActivityPath(sourceFilePath: string): boolean {
+    const segments = path.normalize(sourceFilePath).split(path.sep);
+    return AGENT_ACTIVITY_EXCLUDED_PATH_SEGMENTS.some(segment => segments.includes(segment));
 }
