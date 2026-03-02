@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import sqlite3 from 'sqlite3';
-import { getDaySessions, getTodayDateKey, DaySessionSummary, TodoItem, getStatsSummary, StatsSummary, Heartbeat, insertHeartbeat, deleteHeartbeatsByDateKey, summarizeHeartbeatsForCache, upsertDailySessionsCache, updateAggregateCachesForDate } from '../storage';
+import { getDaySessions, getTodayDateKey, DaySessionSummary, TodoItem, getStatsSummary, StatsSummary, Heartbeat, insertHeartbeat, deleteHeartbeatsByDateKey, summarizeHeartbeatsForCache, upsertDailySessionsCache } from '../storage';
 import { TodaySessionStore } from '../storage/todayStore';
 import { TodoHandler } from '../handlers/todoHandler';
 import { formatDuration } from '../utils/time';
@@ -336,7 +336,6 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                     inserted++;
                 }
                 await upsertDailySessionsCache(this.db, dateKey, importedSummary.sessions, importedSummary.totalTimeMs, importedSummary.lastHeartbeatId);
-                await updateAggregateCachesForDate(this.db, dateKey, existingSummary.totalTimeMs, importedSummary.totalTimeMs);
                 this.cache.delete(dateKey);
                 replacedDays++;
             }
