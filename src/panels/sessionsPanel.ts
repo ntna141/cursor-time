@@ -5,6 +5,7 @@ import { getDaySessions, getTodayDateKey, DaySessionSummary, TodoItem, getStatsS
 import { TodaySessionStore } from '../storage/todayStore';
 import { TodoHandler } from '../handlers/todoHandler';
 import { formatDuration } from '../utils/time';
+import { HeartbeatEndpointConfig, clearHeartbeatEndpointToken, getHeartbeatEndpointConfig, saveHeartbeatEndpointConfig, testConfiguredHeartbeatEndpoint } from '../integrations/heartbeatEndpoint';
 
 class LRUCache<K, V> {
     private cache = new Map<K, V>();
@@ -56,6 +57,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     private lastRenderedSections?: { dateKey: string; summaryHeader: string; panelSwitcher: string; todosSection: string };
     private lastRenderState?: { summary: DaySessionSummary; todos: TodoItem[]; stats: StatsSummary; isToday: boolean };
     private theme: 'dark' | 'blue' = 'dark';
+    private endpointConfig: HeartbeatEndpointConfig = { endpointUrl: '', enabled: false, hasBearerToken: false };
 
     constructor(context: vscode.ExtensionContext, db: sqlite3.Database, todayStore: TodaySessionStore) {
         this.context = context;
@@ -74,6 +76,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     }
 
     public async preload(): Promise<void> {
+        await this.loadEndpointConfig();
         const todayKey = getTodayDateKey();
         const summary = this.todayStore.getSummary();
         const todos = await this.todoHandler.getTodos(todayKey);
@@ -82,7 +85,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         
         if (this._view) {
             if (this.webviewReady) {
-                const sections = this.getAppSections(summary, todos, stats, true, this.activePanel);
+                const sections = this.getAppSections(summary, todos, stats, true, this.activePanel, this.endpointConfig);
                 this._view.webview.postMessage({
                     command: 'updateSections',
                     summaryHeader: sections.summaryHeader,
@@ -94,7 +97,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                 this.lastRenderedSections = { ...sections, dateKey: todayKey };
                 this.lastRenderState = { summary, todos, stats, isToday: true };
             } else {
-                this._view.webview.html = this.getHtml(this._view.webview, summary, todos, stats, true, false, this.activePanel);
+                this._view.webview.html = this.getHtml(this._view.webview, summary, todos, stats, true, false, this.activePanel, this.endpointConfig);
             }
         }
     }
@@ -124,6 +127,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     ) {
         this._view = webviewView;
         this.webviewReady = false;
+        await this.loadEndpointConfig();
 
         webviewView.webview.options = {
             enableScripts: true,
@@ -141,7 +145,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         if (cached) {
             const isToday = this.currentDateKey === getTodayDateKey();
             const stats = await getStatsSummary(this.db);
-            webviewView.webview.html = this.getHtml(webviewView.webview, cached.summary, cached.todos, stats, isToday, false, this.activePanel);
+            webviewView.webview.html = this.getHtml(webviewView.webview, cached.summary, cached.todos, stats, isToday, false, this.activePanel, this.endpointConfig);
         } else if (this.isReady) {
             this.updateView();
         } else {
@@ -185,6 +189,52 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                 }
             } else if (message.command === 'importWakaTime') {
                 await this.handleImportWakaTime();
+            } else if (message.command === 'saveEndpointConfig') {
+                try {
+                    const endpointUrl = typeof message.endpointUrl === 'string' ? message.endpointUrl : '';
+                    const enabled = !!message.enabled;
+                    const updateBearerToken = !!message.updateBearerToken;
+                    const bearerToken = typeof message.bearerToken === 'string' ? message.bearerToken : '';
+
+                    this.endpointConfig = await saveHeartbeatEndpointConfig(this.context, {
+                        endpointUrl,
+                        enabled,
+                        updateBearerToken,
+                        bearerToken
+                    });
+
+                    await this.updateView();
+                    this._view?.webview.postMessage({ command: 'setEndpointStatus', text: 'Endpoint settings saved.', isError: false });
+                } catch (error) {
+                    this._view?.webview.postMessage({
+                        command: 'setEndpointStatus',
+                        text: error instanceof Error ? error.message : 'Failed to save endpoint settings.',
+                        isError: true
+                    });
+                }
+            } else if (message.command === 'clearEndpointToken') {
+                try {
+                    this.endpointConfig = await clearHeartbeatEndpointToken(this.context);
+                    await this.updateView();
+                    this._view?.webview.postMessage({ command: 'setEndpointStatus', text: 'Bearer token cleared.', isError: false });
+                } catch (error) {
+                    this._view?.webview.postMessage({
+                        command: 'setEndpointStatus',
+                        text: error instanceof Error ? error.message : 'Failed to clear bearer token.',
+                        isError: true
+                    });
+                }
+            } else if (message.command === 'testEndpointConfig') {
+                try {
+                    await testConfiguredHeartbeatEndpoint(this.context);
+                    this._view?.webview.postMessage({ command: 'setEndpointStatus', text: 'Endpoint test succeeded.', isError: false });
+                } catch (error) {
+                    this._view?.webview.postMessage({
+                        command: 'setEndpointStatus',
+                        text: error instanceof Error ? error.message : 'Endpoint test failed.',
+                        isError: true
+                    });
+                }
             } else if (message.command === 'prevDay') {
                 this.currentDateKey = this.getOffsetDateKey(this.currentDateKey, -1);
                 this.viewingToday = false;
@@ -274,6 +324,10 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         if (this._view) {
             this._view.webview.postMessage({ command: 'setImportLoading', loading });
         }
+    }
+
+    private async loadEndpointConfig(): Promise<void> {
+        this.endpointConfig = await getHeartbeatEndpointConfig(this.context);
     }
 
     private async handleImportWakaTime(): Promise<void> {
@@ -380,7 +434,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             if (cached && !shouldFocusTodoInput) {
                 const stats = await getStatsSummary(this.db);
                 if (this.webviewReady) {
-                    const sections = this.getAppSections(cached.summary, cached.todos, stats, isToday, this.activePanel);
+                    const sections = this.getAppSections(cached.summary, cached.todos, stats, isToday, this.activePanel, this.endpointConfig);
                     this._view.webview.postMessage({
                         command: 'updateSections',
                         summaryHeader: sections.summaryHeader,
@@ -392,7 +446,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                     this.lastRenderedSections = { ...sections, dateKey: this.currentDateKey };
                     this.lastRenderState = { summary: cached.summary, todos: cached.todos, stats, isToday };
                 } else {
-                    this._view.webview.html = this.getHtml(this._view.webview, cached.summary, cached.todos, stats, isToday, false, this.activePanel);
+                    this._view.webview.html = this.getHtml(this._view.webview, cached.summary, cached.todos, stats, isToday, false, this.activePanel, this.endpointConfig);
                 }
                 return;
             }
@@ -408,7 +462,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             this.cache.set(this.currentDateKey, { summary, todos });
         }
 
-        const sections = this.getAppSections(summary, todos, stats, isToday, this.activePanel);
+        const sections = this.getAppSections(summary, todos, stats, isToday, this.activePanel, this.endpointConfig);
         this.lastRenderState = { summary, todos, stats, isToday };
 
         if (this.webviewReady) {
@@ -433,7 +487,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                 this._view.webview.postMessage({ command: 'focusTodoInput' });
             }
         } else {
-            this._view.webview.html = this.getHtml(this._view.webview, summary, todos, stats, isToday, shouldFocusTodoInput, this.activePanel);
+            this._view.webview.html = this.getHtml(this._view.webview, summary, todos, stats, isToday, shouldFocusTodoInput, this.activePanel, this.endpointConfig);
             this.lastRenderedSections = { ...sections, dateKey: this.currentDateKey };
         }
     }
@@ -560,7 +614,14 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         `;
     }
 
-    private getAppSections(summary: DaySessionSummary, todos: TodoItem[], stats: StatsSummary, isToday: boolean, activePanel: 'sessions' | 'settings' | 'stats' = 'sessions'): { summaryHeader: string; panelSwitcher: string; todosSection: string } {
+    private getAppSections(
+        summary: DaySessionSummary,
+        todos: TodoItem[],
+        stats: StatsSummary,
+        isToday: boolean,
+        activePanel: 'sessions' | 'settings' | 'stats' = 'sessions',
+        endpointConfig: HeartbeatEndpointConfig = this.endpointConfig
+    ): { summaryHeader: string; panelSwitcher: string; todosSection: string } {
         const filteredSessions = summary.sessions.filter(s => s.durationMs >= 60000);
         const lastActiveText = this.getLastActiveTextFromSummary(summary, isToday);
         const timelineHtml = this.getTimelineHtml(summary.sessions);
@@ -650,6 +711,27 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                     <button class="settings-action" id="importWakaTimeBtn">import wakatime</button>
                     <span class="import-spinner" id="importSpinner" style="display: none;">⟳</span>
                 </div>
+                <div class="settings-section endpoint-settings">
+                    <div class="settings-field">
+                        <label class="settings-label" for="endpointUrlInput">endpoint url</label>
+                        <input class="settings-input" id="endpointUrlInput" type="text" value="${this.escapeHtml(endpointConfig.endpointUrl)}" placeholder="https://your-server.com/heartbeat">
+                    </div>
+                    <div class="settings-field">
+                        <label class="settings-label" for="endpointTokenInput">bearer token</label>
+                        <input class="settings-input" id="endpointTokenInput" type="password" value="" placeholder="${endpointConfig.hasBearerToken ? 'token saved (enter to replace)' : 'paste token'}">
+                        <div class="settings-meta">token: ${endpointConfig.hasBearerToken ? 'saved' : 'not set'}</div>
+                    </div>
+                    <label class="settings-checkbox-row">
+                        <input id="endpointEnabledInput" type="checkbox" ${endpointConfig.enabled ? 'checked' : ''}>
+                        <span>enable heartbeat post</span>
+                    </label>
+                    <div class="settings-actions-row">
+                        <button class="settings-action" id="saveEndpointBtn">save endpoint</button>
+                        <button class="settings-action" id="clearEndpointTokenBtn">clear token</button>
+                        <button class="settings-action" id="testEndpointBtn">test endpoint</button>
+                    </div>
+                    <div class="settings-meta" id="endpointStatus"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -671,8 +753,8 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         return { summaryHeader, panelSwitcher, todosSection };
     }
 
-    private getAppHtml(summary: DaySessionSummary, todos: TodoItem[], stats: StatsSummary, isToday: boolean, activePanel: 'sessions' | 'settings' | 'stats' = 'sessions'): string {
-        const sections = this.getAppSections(summary, todos, stats, isToday, activePanel);
+    private getAppHtml(summary: DaySessionSummary, todos: TodoItem[], stats: StatsSummary, isToday: boolean, activePanel: 'sessions' | 'settings' | 'stats' = 'sessions', endpointConfig: HeartbeatEndpointConfig = this.endpointConfig): string {
+        const sections = this.getAppSections(summary, todos, stats, isToday, activePanel, endpointConfig);
         return `
     ${sections.summaryHeader}
     ${sections.panelSwitcher}
@@ -680,9 +762,9 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
         `;
     }
 
-    private getHtml(webview: vscode.Webview, summary: DaySessionSummary, todos: TodoItem[], stats: StatsSummary, isToday: boolean, shouldFocusTodoInput: boolean = false, activePanel: 'sessions' | 'settings' | 'stats' = 'sessions'): string {
+    private getHtml(webview: vscode.Webview, summary: DaySessionSummary, todos: TodoItem[], stats: StatsSummary, isToday: boolean, shouldFocusTodoInput: boolean = false, activePanel: 'sessions' | 'settings' | 'stats' = 'sessions', endpointConfig: HeartbeatEndpointConfig = this.endpointConfig): string {
         const stylesUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'sessionsPanel.css'));
-        const sections = this.getAppSections(summary, todos, stats, isToday, activePanel);
+        const sections = this.getAppSections(summary, todos, stats, isToday, activePanel, endpointConfig);
         const themeAttr = this.theme === 'blue' ? 'blue' : '';
         return `<!DOCTYPE html>
 <html lang="en">
@@ -776,11 +858,66 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                 });
             }
 
+            const saveEndpointBtn = document.getElementById('saveEndpointBtn');
+            if (saveEndpointBtn) {
+                bindOnce(saveEndpointBtn, 'SaveEndpointClick', 'click', () => {
+                    const endpointUrlInput = document.getElementById('endpointUrlInput');
+                    const endpointTokenInput = document.getElementById('endpointTokenInput');
+                    const endpointEnabledInput = document.getElementById('endpointEnabledInput');
+                    if (!(endpointUrlInput instanceof HTMLInputElement) || !(endpointEnabledInput instanceof HTMLInputElement)) {
+                        return;
+                    }
+
+                    const endpointUrl = endpointUrlInput.value;
+                    const bearerToken = endpointTokenInput instanceof HTMLInputElement ? endpointTokenInput.value : '';
+
+                    vscode.postMessage({
+                        command: 'saveEndpointConfig',
+                        endpointUrl,
+                        enabled: endpointEnabledInput.checked,
+                        updateBearerToken: bearerToken.length > 0,
+                        bearerToken
+                    });
+                });
+            }
+
+            const clearEndpointTokenBtn = document.getElementById('clearEndpointTokenBtn');
+            if (clearEndpointTokenBtn) {
+                bindOnce(clearEndpointTokenBtn, 'ClearEndpointTokenClick', 'click', () => {
+                    vscode.postMessage({ command: 'clearEndpointToken' });
+                });
+            }
+
+            const testEndpointBtn = document.getElementById('testEndpointBtn');
+            if (testEndpointBtn) {
+                bindOnce(testEndpointBtn, 'TestEndpointClick', 'click', () => {
+                    vscode.postMessage({ command: 'testEndpointConfig' });
+                });
+            }
+
             panelSwitcher = document.querySelector('.panel-switcher');
             sessionsPanel = document.querySelector('.sessions-panel');
             settingsPanel = document.querySelector('.settings-panel');
             statsPanel = document.querySelector('.stats-panel');
-            updatePanelHeight = () => {};
+            updatePanelHeight = () => {
+                if (!panelSwitcher) {
+                    return;
+                }
+                const activePanelEl = [sessionsPanel, statsPanel, settingsPanel].find(
+                    (panel) => panel && panel.classList.contains('visible')
+                );
+                if (!activePanelEl) {
+                    return;
+                }
+                const sessionsHeight = sessionsPanel ? sessionsPanel.scrollHeight : 0;
+                const statsHeight = statsPanel ? statsPanel.scrollHeight : 0;
+                const settingsHeight = settingsPanel ? settingsPanel.scrollHeight : 0;
+                const sharedDataPanelHeight = Math.max(170, sessionsHeight, statsHeight);
+                const nextHeight = activePanelEl === settingsPanel
+                    ? Math.max(170, settingsHeight)
+                    : sharedDataPanelHeight;
+                panelSwitcher.style.height = nextHeight + 'px';
+            };
             setActivePanel = (panel) => {
                 if (sessionsPanel) {
                     sessionsPanel.classList.toggle('visible', panel === 'sessions');
@@ -982,6 +1119,19 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
                 if (importSpinner) {
                     importSpinner.style.display = message.loading ? 'inline-block' : 'none';
                 }
+            } else if (message.command === 'setEndpointStatus') {
+                const endpointStatus = document.getElementById('endpointStatus');
+                if (endpointStatus) {
+                    endpointStatus.textContent = message.text || '';
+                    endpointStatus.classList.toggle('error', !!message.isError);
+                    endpointStatus.classList.toggle('success', !message.isError && !!message.text);
+                }
+                if (!message.isError) {
+                    const endpointTokenInput = document.getElementById('endpointTokenInput');
+                    if (endpointTokenInput instanceof HTMLInputElement) {
+                        endpointTokenInput.value = '';
+                    }
+                }
             } else if (message.command === 'setActivePanel') {
                 setActivePanel(message.activePanel || 'sessions');
                 updatePanelHeight();
@@ -1029,7 +1179,8 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             this.lastRenderState.todos,
             this.lastRenderState.stats,
             this.lastRenderState.isToday,
-            this.activePanel
+            this.activePanel,
+            this.endpointConfig
         );
         this.lastRenderedSections = { ...sections, dateKey: this.currentDateKey };
     }

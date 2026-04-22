@@ -8,6 +8,7 @@ import { setupCursorWatcher } from './watchers/cursorWatcher';
 import { HeartbeatAggregator } from './aggregators/heartbeatAggregator';
 import { SessionsPanelProvider } from './panels/sessionsPanel';
 import { formatDuration } from './utils/time';
+import { sendHeartbeatToConfiguredEndpoint } from './integrations/heartbeatEndpoint';
 
 let dbInstance: sqlite3.Database | null = null;
 let aggregator: HeartbeatAggregator | null = null;
@@ -97,8 +98,9 @@ export async function activate(context: vscode.ExtensionContext) {
         })();
     });
 
-    aggregator.onHeartbeat(() => {
+    aggregator.onHeartbeat((heartbeat) => {
         void (async () => {
+            await sendHeartbeatToConfiguredEndpoint(context, heartbeat, outputChannel);
             await todayStore!.reconcileFromDatabase();
             const summary = todayStore!.getSummary();
             sessionsPanel!.refreshToday(summary);

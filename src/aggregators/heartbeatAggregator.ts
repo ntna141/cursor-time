@@ -13,7 +13,7 @@ export class HeartbeatAggregator {
     private timer: NodeJS.Timeout | null = null;
     private db: sqlite3.Database;
     private outputChannel: vscode.OutputChannel;
-    private heartbeatCallbacks: (() => void)[] = [];
+    private heartbeatCallbacks: Array<(heartbeat: Heartbeat) => void> = [];
     private tickCallbacks: (() => void)[] = [];
     private todayStore: TodaySessionStore;
 
@@ -23,7 +23,7 @@ export class HeartbeatAggregator {
         this.todayStore = todayStore;
     }
 
-    onHeartbeat(callback: () => void) {
+    onHeartbeat(callback: (heartbeat: Heartbeat) => void) {
         this.heartbeatCallbacks.push(callback);
     }
 
@@ -94,7 +94,7 @@ export class HeartbeatAggregator {
         insertHeartbeat(this.db, heartbeat);
         this.todayStore.pushHeartbeat(heartbeat);
         
-        this.heartbeatCallbacks.forEach(cb => cb());
+        this.heartbeatCallbacks.forEach(cb => cb(heartbeat));
 
         const time = new Date(heartbeat.timestamp).toLocaleTimeString();
         const displayName = heartbeat.type === 'agent' ? 'agent chat' : path.basename(heartbeat.entity);

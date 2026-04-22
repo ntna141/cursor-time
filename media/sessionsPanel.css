@@ -497,10 +497,9 @@ body > * {
 }
 
 .sessions-panel {
-    height: 100%;
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    justify-content: flex-start;
     margin-bottom: 5px;
 }
 
@@ -621,6 +620,71 @@ body > * {
 .settings-action:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+.endpoint-settings {
+    border-top: 1px solid var(--border-color);
+    padding-top: 12px;
+}
+
+.settings-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.settings-label {
+    color: var(--text-muted);
+    font-size: 11px;
+    text-transform: lowercase;
+}
+
+.settings-input {
+    width: 100%;
+    background: var(--bg-settings-action);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-main);
+    font-family: monospace;
+    font-size: 12px;
+    padding: 6px 8px;
+    box-sizing: border-box;
+}
+
+.settings-input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+.settings-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 11px;
+    margin-top: 4px;
+}
+
+.settings-actions-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.settings-meta {
+    color: var(--text-subtle);
+    font-size: 10px;
+    margin-top: 4px;
+}
+
+#endpointStatus.success {
+    color: var(--accent-primary);
+}
+
+#endpointStatus.error {
+    color: #e06c75;
 }
 
 .import-spinner {
